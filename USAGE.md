@@ -4,7 +4,7 @@ Simple multi-GPU launcher for running BindCraft on RunPod servers.
 
 ## Quick Start
 
-1. **Edit the config section** in [run_bindBot.sh](run_bindBot.sh:14-25):
+1. **Edit the config section** in [run_BindBot.sh](run_BindBot.sh:14-25):
    ```bash
    # Required: Path to your settings file (target configuration)
    SETTINGS_FILE="settings_target/PDL1.json"
@@ -23,7 +23,7 @@ Simple multi-GPU launcher for running BindCraft on RunPod servers.
 
 2. **Run it**:
    ```bash
-   ./run_bindBot.sh
+   ./run_BindBot.sh
    ```
 
 That's it! The script will:
@@ -88,7 +88,7 @@ All paths in settings files should use the **container paths**:
 
 ### Example 1: Simple PDL1 Binder (100 designs)
 
-Edit `run_bindBot.sh`:
+Edit `run_BindBot.sh`:
 ```bash
 SETTINGS_FILE="settings_target/PDL1.json"
 FILTERS_FILE="settings_filters/default_filters.json"
@@ -96,11 +96,11 @@ ADVANCED_FILE="settings_advanced/default_4stage_multimer.json"
 TOTAL_DESIGNS=100
 ```
 
-Run: `./run_bindBot.sh`
+Run: `./run_BindBot.sh`
 
 ### Example 2: IgG Fc Binder (500 designs, relaxed filters)
 
-Edit `run_bindBot.sh`:
+Edit `run_BindBot.sh`:
 ```bash
 SETTINGS_FILE="settings_target/IgG_Fc.json"
 FILTERS_FILE="settings_filters/relaxed_filters.json"
@@ -108,11 +108,11 @@ ADVANCED_FILE="settings_advanced/default_4stage_multimer_mpnn.json"
 TOTAL_DESIGNS=500
 ```
 
-Run: `./run_bindBot.sh`
+Run: `./run_BindBot.sh`
 
 ### Example 3: Fast run without PyRosetta
 
-Edit `run_bindBot.sh`:
+Edit `run_BindBot.sh`:
 ```bash
 SETTINGS_FILE="settings_target/PDL1.json"
 TOTAL_DESIGNS=100
@@ -120,7 +120,7 @@ NO_PYROSETTA=true  # Skip relaxation for speed
 VERBOSE=true       # Show detailed progress
 ```
 
-Run: `./run_bindBot.sh`
+Run: `./run_BindBot.sh`
 
 ## GPU Distribution
 
@@ -242,13 +242,13 @@ In settings JSON: `"lengths": [8, 25]`
 }
 ```
 
-3. Update `run_bindBot.sh`:
+3. Update `run_BindBot.sh`:
 ```bash
 SETTINGS_FILE="settings_target/MyTarget.json"
 TOTAL_DESIGNS=500
 ```
 
-4. Run: `./run_bindBot.sh`
+4. Run: `./run_BindBot.sh`
 
 ## Need Help?
 

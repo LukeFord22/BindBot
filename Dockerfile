@@ -1,7 +1,7 @@
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 LABEL org.opencontainers.image.source="https://github.com/lukeford22/BindBot.git"
-LABEL org.opencontainers.image.description="BindBot"
+LABEL org.opencontainers.image.description="BindBot Base Environment - Clone repo at runtime"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -21,8 +21,17 @@ RUN apt-get update && \
       build-essential \
       pkg-config \
       procps \
-      unzip && \
+      unzip \
+      openssh-server && \
     rm -rf /var/lib/apt/lists/*
+
+# Configure SSH for RunPod (RunPod handles key injection automatically)
+RUN mkdir -p /var/run/sshd /root/.ssh && \
+    chmod 700 /root/.ssh && \
+    ssh-keygen -A
+
+# Expose SSH port
+EXPOSE 22
 
 # Install OpenCL ICD loader and tools; register NVIDIA OpenCL ICD
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,37 +55,70 @@ RUN conda config --set channel_priority strict && \
     conda update -n base -c conda-forge conda && \
     conda clean -afy
 
-# Create workdir and copy project
-WORKDIR /app
-COPY . /app
+# ============================================
+# INSTALL DEPENDENCIES TO /data (PERSISTENT)
+# ============================================
 
-# Ensure helper binaries are executable (also handled by installer)
-RUN chmod +x /app/functions/dssp || true && \
-    chmod +x /app/functions/sc || true
+# Create persistent data directory and copy minimal files needed for installation
+RUN mkdir -p /data
+WORKDIR /data
 
-# Build environment and download AF2 weights without PyRosetta
-# Match CUDA to base image; installer pins jax/jaxlib=0.6.0
-# Allow toggling PyRosetta install at build-time
+# Copy ONLY the installer script and functions directory
+COPY install_bindcraft.sh /data/install_bindcraft.sh
+COPY functions /data/functions
+
+# Run the installer script from /data directory
+# This will create: /data/params (weights) and make /data/functions binaries executable
 ARG WITH_PYROSETTA=false
 ENV WITH_PYROSETTA=${WITH_PYROSETTA}
-RUN bash -lc 'source ${CONDA_DIR}/etc/profile.d/conda.sh && \
-    EXTRA=""; if [ "${WITH_PYROSETTA}" != "true" ]; then EXTRA="--no-pyrosetta"; fi; \
-    bash /app/install_bindcraft.sh --pkg_manager conda --cuda 12.1 ${EXTRA}'
 
-# Default environment
+RUN bash -lc 'set -e && \
+    source ${CONDA_DIR}/etc/profile.d/conda.sh && \
+    cd /data && \
+    EXTRA=""; if [ "${WITH_PYROSETTA}" != "true" ]; then EXTRA="--no-pyrosetta"; fi && \
+    bash /data/install_bindcraft.sh --pkg_manager conda --cuda 12.1 ${EXTRA}'
+
+# Verify installation succeeded
+RUN test -f /data/params/params_model_5_ptm.npz || { echo "AlphaFold weights not found!"; exit 1; }
+RUN test -x /data/functions/dssp || { echo "DSSP binary not executable!"; exit 1; }
+
+# Remove installer script (no longer needed, saves space)
+RUN rm -f /data/install_bindcraft.sh
+
+# ============================================
+# ENVIRONMENT VARIABLES
+# ============================================
+
+# Set PATH for BindCraft environment
 ENV PATH=${CONDA_DIR}/envs/BindCraft/bin:${CONDA_DIR}/bin:${PATH} \
     LD_LIBRARY_PATH=${CONDA_DIR}/envs/BindCraft/lib:${LD_LIBRARY_PATH} \
-    PYTHONUNBUFFERED=1 \
-    BINDCRAFT_HOME=/app
+    PYTHONUNBUFFERED=1
+
+# Point BindCraft to persistent data locations
+ENV BINDCRAFT_HOME=/app \
+    BINDCRAFT_PARAMS=/data/params \
+    BINDCRAFT_FUNCTIONS=/data/functions
 
 # Prefer OpenCL (fallback to CUDA) in OpenMM by default
 ENV OPENMM_PLATFORM_ORDER=OpenCL,CUDA \
     OPENMM_DEFAULT_PLATFORM=OpenCL
 
-# Modal-compatible entrypoint that execs args
+# GitHub repo to clone
+ENV GITHUB_REPO=https://github.com/lukeford22/BindBot.git \
+    GITHUB_BRANCH=main
+
+# ============================================
+# ENTRYPOINT - CLONE REPO AT RUNTIME
+# ============================================
+
+# Create empty /app directory (will be populated at runtime)
+WORKDIR /app
+
+# Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/bindcraft-entrypoint.sh
 RUN chmod +x /usr/local/bin/bindcraft-entrypoint.sh
+
 ENTRYPOINT ["/usr/local/bin/bindcraft-entrypoint.sh"]
 
-# Default command prints help
-CMD ["python", "bindcraft.py", "--help"]
+# Default command
+CMD ["/bin/bash"]
