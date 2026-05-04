@@ -154,13 +154,16 @@ echo "=========================================="
 # If no command provided OR command is bash/sh, keep container alive
 if [ $# -eq 0 ] || [ "$1" = "/bin/bash" ] || [ "$1" = "bash" ] || [ "$1" = "/bin/sh" ] || [ "$1" = "sh" ]; then
     echo "[INFO] Starting container in persistent mode for SSH access..."
-    echo "[INFO] Container will stay alive. Use 'docker exec' or SSH to interact."
-    echo ""
 
-    # Keep container running indefinitely
-    # Use tail -f on a device that never closes
+    mkdir -p /var/run/sshd
+    ssh-keygen -A >/dev/null 2>&1 || true
+
+    if ! pgrep -x sshd >/dev/null; then
+        echo "[INFO] Starting sshd..."
+        /usr/sbin/sshd
+    fi
+
     exec tail -f /dev/null
 else
-    # Execute the provided command normally
     exec "$@"
 fi

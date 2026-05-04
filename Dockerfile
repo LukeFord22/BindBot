@@ -30,6 +30,8 @@ RUN mkdir -p /var/run/sshd /root/.ssh && \
     chmod 700 /root/.ssh && \
     ssh-keygen -A
 
+RUN printf '\nPermitRootLogin yes\nPubkeyAuthentication yes\nPasswordAuthentication no\nAuthorizedKeysFile .ssh/authorized_keys\n' >> /etc/ssh/sshd_config
+
 # Expose SSH port
 EXPOSE 22
 
