@@ -150,4 +150,17 @@ echo ""
 cd "$APP_DIR"
 echo "[INFO] Executing command: $@"
 echo "=========================================="
-exec "$@"
+
+# If no command provided OR command is bash/sh, keep container alive
+if [ $# -eq 0 ] || [ "$1" = "/bin/bash" ] || [ "$1" = "bash" ] || [ "$1" = "/bin/sh" ] || [ "$1" = "sh" ]; then
+    echo "[INFO] Starting container in persistent mode for SSH access..."
+    echo "[INFO] Container will stay alive. Use 'docker exec' or SSH to interact."
+    echo ""
+
+    # Keep container running indefinitely
+    # Use tail -f on a device that never closes
+    exec tail -f /dev/null
+else
+    # Execute the provided command normally
+    exec "$@"
+fi
