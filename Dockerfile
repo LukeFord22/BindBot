@@ -66,7 +66,7 @@ RUN mkdir -p /data
 WORKDIR /data
 
 # Copy ONLY the installer script and functions directory
-COPY install_bindcraft.sh /data/install_bindcraft.sh
+COPY install.sh /data/install.sh
 COPY functions /data/functions
 
 # Run the installer script from /data directory
@@ -78,14 +78,14 @@ RUN bash -lc 'set -e && \
     source ${CONDA_DIR}/etc/profile.d/conda.sh && \
     cd /data && \
     EXTRA=""; if [ "${WITH_PYROSETTA}" != "true" ]; then EXTRA="--no-pyrosetta"; fi && \
-    bash /data/install_bindcraft.sh --pkg_manager conda --cuda 12.1 ${EXTRA}'
+    bash /data/install.sh --pkg_manager conda --cuda 12.1 ${EXTRA}'
 
 # Verify installation succeeded
 RUN test -f /data/params/params_model_5_ptm.npz || { echo "AlphaFold weights not found!"; exit 1; }
 RUN test -x /data/functions/dssp || { echo "DSSP binary not executable!"; exit 1; }
 
 # Remove installer script (no longer needed, saves space)
-RUN rm -f /data/install_bindcraft.sh
+RUN rm -f /data/install.sh
 
 # ============================================
 # ENVIRONMENT VARIABLES
@@ -117,10 +117,10 @@ ENV GITHUB_REPO=https://github.com/lukeford22/BindBot.git \
 WORKDIR /app
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh /usr/local/bin/bindcraft-entrypoint.sh
-RUN chmod +x /usr/local/bin/bindcraft-entrypoint.sh
+COPY docker-entrypoint.sh /usr/local/bin/bindbot-entrypoint.sh
+RUN chmod +x /usr/local/bin/bindbot-entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/bindcraft-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/bindbot-entrypoint.sh"]
 
 # Default command
 CMD ["/bin/bash"]
