@@ -155,14 +155,59 @@ echo "=========================================="
 if [ $# -eq 0 ] || [ "$1" = "/bin/bash" ] || [ "$1" = "bash" ] || [ "$1" = "/bin/sh" ] || [ "$1" = "sh" ]; then
     echo "[INFO] Starting container in persistent mode for SSH access..."
 
-    mkdir -p /var/run/sshd
+    # Ensure SSH directories and permissions are correct
+    mkdir -p /var/run/sshd /root/.ssh
+    chmod 700 /root/.ssh
+
+    # Regenerate host keys if needed
     ssh-keygen -A >/dev/null 2>&1 || true
 
-    if ! pgrep -x sshd >/dev/null; then
-        echo "[INFO] Starting sshd..."
-        /usr/sbin/sshd
+    # Fix authorized_keys permissions if it exists
+    if [ -f /root/.ssh/authorized_keys ]; then
+        chmod 600 /root/.ssh/authorized_keys
+        echo "[INFO] Found authorized_keys with $(wc -l < /root/.ssh/authorized_keys) keys"
+    else
+        echo "[WARN] No authorized_keys found at /root/.ssh/authorized_keys"
+        echo "[WARN] RunPod should inject keys automatically. If SSH fails, check RunPod SSH key settings."
     fi
 
+    # Check if SSH public key exists in environment (RunPod injects this)
+    if [ -n "${PUBLIC_KEY:-}" ]; then
+        echo "[INFO] Found PUBLIC_KEY environment variable, adding to authorized_keys..."
+        echo "$PUBLIC_KEY" > /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        echo "[SUCCESS] Added key from PUBLIC_KEY environment variable"
+    fi
+
+    # Start SSH daemon if not already running
+    if ! pgrep -x sshd >/dev/null; then
+        echo "[INFO] Starting sshd on port 22..."
+        # Unset LD_LIBRARY_PATH to prevent library conflicts
+        env -u LD_LIBRARY_PATH /usr/sbin/sshd -D &
+        SSHD_PID=$!
+        echo "[SUCCESS] sshd started (PID: $SSHD_PID)"
+
+        # Give sshd a moment to start
+        sleep 2
+
+        # Verify it's running
+        if pgrep -x sshd >/dev/null; then
+            echo "[SUCCESS] sshd is running and accepting connections"
+        else
+            echo "[ERROR] sshd failed to start!"
+        fi
+    else
+        echo "[INFO] sshd already running"
+    fi
+
+    echo ""
+    echo "========================================"
+    echo "Container ready for SSH access"
+    echo "Connect using RunPod's SSH instructions"
+    echo "========================================"
+    echo ""
+
+    # Keep container alive
     exec tail -f /dev/null
 else
     exec "$@"
