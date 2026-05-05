@@ -67,7 +67,24 @@ echo "  PasswordAuthentication: $(grep -i '^PasswordAuthentication' /etc/ssh/ssh
 echo "  AuthorizedKeysFile: $(grep -i '^AuthorizedKeysFile' /etc/ssh/sshd_config || echo 'not set')"
 echo ""
 
-echo "[7] SSH Logs (last 20 lines):"
+echo "[7] SSH Config Validation:"
+if /usr/sbin/sshd -t 2>&1; then
+    echo "  ✓ sshd config is valid"
+else
+    echo "  ✗ sshd config has errors (see above)"
+fi
+echo ""
+
+echo "[8] Library Conflicts Check:"
+if [ -n "$LD_LIBRARY_PATH" ]; then
+    echo "  ⚠ LD_LIBRARY_PATH is set: $LD_LIBRARY_PATH"
+    echo "  This may cause OpenSSL version conflicts with sshd"
+else
+    echo "  ✓ LD_LIBRARY_PATH is not set"
+fi
+echo ""
+
+echo "[9] SSH Logs (last 20 lines):"
 if [ -f /var/log/auth.log ]; then
     tail -n 20 /var/log/auth.log | grep -i ssh
 elif [ -f /var/log/secure ]; then
@@ -77,7 +94,16 @@ else
 fi
 echo ""
 
-echo "[8] Test SSH Connection (from localhost):"
+echo "[10] Key Format Validation:"
+if command -v ssh-keygen >/dev/null && [ -f /root/.ssh/authorized_keys ]; then
+    echo "  Validating keys with ssh-keygen..."
+    ssh-keygen -l -f /root/.ssh/authorized_keys 2>&1 | head -n 5
+else
+    echo "  Cannot validate (ssh-keygen or authorized_keys missing)"
+fi
+echo ""
+
+echo "[11] Test SSH Connection (from localhost):"
 if command -v ssh >/dev/null; then
     echo "  Testing: ssh -o StrictHostKeyChecking=no root@localhost -p 22 'echo OK'"
     timeout 3 ssh -o StrictHostKeyChecking=no root@localhost -p 22 'echo OK' 2>&1 || echo "  ✗ Connection failed"

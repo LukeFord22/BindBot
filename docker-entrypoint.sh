@@ -179,11 +179,28 @@ if [ $# -eq 0 ] || [ "$1" = "/bin/bash" ] || [ "$1" = "bash" ] || [ "$1" = "/bin
         echo "[SUCCESS] Added key from PUBLIC_KEY environment variable"
     fi
 
+    # Create sshd wrapper to isolate from conda libraries
+    cat > /usr/local/bin/sshd-isolated << 'SSHD_EOF'
+#!/bin/bash
+# Isolate sshd from conda libraries to prevent OpenSSL conflicts
+unset LD_LIBRARY_PATH
+unset CONDA_PREFIX
+unset CONDA_DEFAULT_ENV
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+exec /usr/sbin/sshd "$@"
+SSHD_EOF
+    chmod +x /usr/local/bin/sshd-isolated
+
+    # Test sshd config before starting
+    echo "[INFO] Testing sshd configuration..."
+    if ! /usr/sbin/sshd -t 2>&1; then
+        echo "[ERROR] sshd config test failed! Check /etc/ssh/sshd_config"
+    fi
+
     # Start SSH daemon if not already running
     if ! pgrep -x sshd >/dev/null; then
         echo "[INFO] Starting sshd on port 22..."
-        # Unset LD_LIBRARY_PATH to prevent library conflicts
-        env -u LD_LIBRARY_PATH /usr/sbin/sshd -D &
+        /usr/local/bin/sshd-isolated -D &
         SSHD_PID=$!
         echo "[SUCCESS] sshd started (PID: $SSHD_PID)"
 
@@ -193,8 +210,16 @@ if [ $# -eq 0 ] || [ "$1" = "/bin/bash" ] || [ "$1" = "bash" ] || [ "$1" = "/bin
         # Verify it's running
         if pgrep -x sshd >/dev/null; then
             echo "[SUCCESS] sshd is running and accepting connections"
+
+            # Verify port is listening
+            if netstat -tlnp 2>/dev/null | grep -q ':22 '; then
+                echo "[SUCCESS] Port 22 is listening"
+            else
+                echo "[WARN] Port 22 may not be listening properly"
+            fi
         else
             echo "[ERROR] sshd failed to start!"
+            echo "[ERROR] Check logs with: journalctl -u sshd or /var/log/auth.log"
         fi
     else
         echo "[INFO] sshd already running"
