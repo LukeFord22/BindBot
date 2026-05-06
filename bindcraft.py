@@ -3,9 +3,9 @@
 ####################################
 ### Import dependencies
 import gc
-from BindBot.functions import *
-from BindBot.functions.generic_utils import insert_data # Explicit import for insert_data
-from BindBot.functions.biopython_utils import clear_dssp_cache # Explicit import for DSSP cache management
+from functions import *
+from functions.generic_utils import insert_data # Explicit import for insert_data
+from functions.biopython_utils import clear_dssp_cache # Explicit import for DSSP cache management
 import logging
 import os
 import sys
@@ -411,7 +411,7 @@ final_csv = os.path.join(target_settings["design_path"], 'final_design_stats.csv
 failure_csv = os.path.join(target_settings["design_path"], 'failure_csv.csv')
 
 # Migrate existing CSVs to include new columns (backwards compatibility for resumed jobs)
-from BindBot.functions.generic_utils import migrate_csv_columns
+from functions.generic_utils import migrate_csv_columns
 migrate_csv_columns(trajectory_csv, trajectory_labels)
 migrate_csv_columns(mpnn_csv, design_labels)
 migrate_csv_columns(final_csv, final_labels)

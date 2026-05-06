@@ -10,9 +10,9 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from BindBot.functions.pyrosetta_utils import pr_relax, PYROSETTA_AVAILABLE
-    from BindBot.functions.pr_alternative_utils import openmm_relax
-    from BindBot.functions.generic_utils import clean_pdb
+    from functions.pyrosetta_utils import pr_relax, PYROSETTA_AVAILABLE
+    from functions.pr_alternative_utils import openmm_relax
+    from functions.generic_utils import clean_pdb
     if PYROSETTA_AVAILABLE: # Import pr here if available, for initialization
         from pyrosetta import init as pr_init
 except ImportError as e:

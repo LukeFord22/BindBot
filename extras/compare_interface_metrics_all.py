@@ -22,9 +22,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from BindBot.functions.pyrosetta_utils import score_interface, PYROSETTA_AVAILABLE, pr
-from BindBot.functions.biopython_utils import calculate_clash_score
-from BindBot.functions import pr_alternative_utils as alt
+from functions.pyrosetta_utils import score_interface, PYROSETTA_AVAILABLE, pr
+from functions.biopython_utils import calculate_clash_score
+from functions import pr_alternative_utils as alt
 
 _PROCESS_PYROSETTA_READY = False
 

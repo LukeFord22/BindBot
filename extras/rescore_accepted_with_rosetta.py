@@ -40,7 +40,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from BindBot.functions.pyrosetta_utils import score_interface, PYROSETTA_AVAILABLE, pr, pr_relax
+from functions.pyrosetta_utils import score_interface, PYROSETTA_AVAILABLE, pr, pr_relax
 
 
 ###############################################################################

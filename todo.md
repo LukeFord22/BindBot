@@ -4,6 +4,29 @@ Integrate pDockQ2 or PI_Score. These metrics look specifically at the interface 
 
 Add settings for pH, protease, and temp selection
 
+AF2 loss should control:
+“Shape and physics tendencies”
+
+Examples:
+compactness
+interface confidence
+rigidity
+multi-state compatibility
+loop minimization
+buried surface area
+
+Post-MPNN filters should control:
+“Sequence chemistry preferences”
+
+Examples:
+protease motifs
+pH-sensitive residues
+aggregation risk
+disorder
+charge balance
+amino acid composition
+
+
 Use tools like MaSIF or PeSTo (surface fingerprinting) before running BindCraft to identify "druggable" patches.
 
 Automatically pipe the top 50 BindCraft designs through Chai-1 and Boltz-2.

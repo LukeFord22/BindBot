@@ -18,11 +18,11 @@ FILTERS_FILE="settings_filters/default_filters.json"
 ADVANCED_FILE="settings_advanced/default_4stage_multimer.json"
 
 # Total number of designs to generate (will be split across GPUs)
-TOTAL_DESIGNS=100
+TOTAL_DESIGNS=10
 
 # Additional options (set to "true" to enable)
 NO_PYROSETTA=true
-VERBOSE=false
+VERBOSE=true
 
 #############################################
 ### END CONFIG - Don't edit below this line
@@ -30,7 +30,7 @@ VERBOSE=false
 
 BINDCRAFT_DIR="/app"
 WORKSPACE_DIR="/workspace"
-LOG_FILE="$WORKSPACE_DIR/multi_gpu_launcher.log"
+LOG_FILE="$WORKSPACE_DIR/run.log"
 
 # Logging setup
 mkdir -p "$WORKSPACE_DIR"
@@ -104,7 +104,7 @@ fi
 
 # Activate conda environment
 echo "[STEP] Activating BindCraft conda environment..."
-source /opt/conda/etc/profile.d/conda.sh
+source /miniforge3/etc/profile.d/conda.sh
 conda activate BindCraft || {
     echo "[ERROR] Failed to activate BindCraft environment"
     exit 1
