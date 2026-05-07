@@ -36,10 +36,6 @@ POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
 ENABLE_MULTI_STATE=false
 MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
 
-# Custom AF2 losses: Compact/rigid binder optimization
-ENABLE_CUSTOM_LOSSES=false
-CUSTOM_LOSSES_CONFIG="settings/settings_losses/custom_af2_losses.json"
-
 #############################################
 ### END CONFIG - Don't edit below this line
 #############################################
@@ -52,39 +48,9 @@ LOG_FILE="$WORKSPACE_DIR/run.log"
 ### PIPELINE FUNCTIONS
 #############################################
 
-# Function to apply pre-processing (custom losses)
-apply_preprocessing() {
-    echo ""
-    echo "=== [PRE-PROCESSING] Applying pipeline enhancements ==="
 
-    # Check custom AF2 losses integration
-    if [ "$ENABLE_CUSTOM_LOSSES" = true ]; then
-        echo "[STEP] Checking custom AF2 losses integration..."
+############## post-processing pipeline ##############
 
-        local losses_config="$BINDCRAFT_DIR/$CUSTOM_LOSSES_CONFIG"
-
-        if [ ! -f "$losses_config" ]; then
-            echo "[WARN] Custom losses config not found: $losses_config"
-            echo "[WARN] Skipping custom losses"
-        else
-            # Check if integration is applied
-            python "$BINDCRAFT_DIR/extras/integrate_custom_losses.py" --check | grep -q "APPLIED"
-            if [ $? -eq 0 ]; then
-                echo "[SUCCESS] Custom AF2 losses integration detected"
-                echo "[INFO] Losses will be applied from: $losses_config"
-            else
-                echo "[WARN] Custom AF2 losses integration not applied"
-                echo "[WARN] Run: python integrate_custom_losses.py --apply"
-                echo "[WARN] Or see --manual-instructions for integration guide"
-            fi
-        fi
-    fi
-
-    echo "[PRE-PROCESSING] Complete"
-    echo ""
-}
-
-# Function to run post-processing pipeline
 run_post_processing() {
     local output_dir="$1"
 
@@ -165,7 +131,9 @@ run_post_processing() {
     echo ""
 }
 
-# Logging setup
+
+############## Logging & setup ##############
+
 mkdir -p "$WORKSPACE_DIR"
 touch "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -242,9 +210,6 @@ conda activate BindCraft || {
     echo "[ERROR] Failed to activate BindCraft environment"
     exit 1
 }
-
-# Apply pre-processing enhancements
-apply_preprocessing
 
 # Create modified settings files for each GPU
 echo "[STEP] Preparing configuration files for each GPU instance..."
