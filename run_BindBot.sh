@@ -29,18 +29,18 @@ VERBOSE=true
 #############################################
 
 # Post-filtering: Apply additional biochemical/structural filters to accepted designs
-ENABLE_POST_FILTERING=false
+ENABLE_POST_FILTERING=true
 POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
 
 # Multi-state validation: Test binders against multiple target conformations
-ENABLE_MULTI_STATE=false
+ENABLE_MULTI_STATE=true
 MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
 
 #############################################
 ### END CONFIG - Don't edit below this line
 #############################################
 
-BINDCRAFT_DIR="/app"
+BINDCRAFT_DIR="/workspace/BindBot"
 WORKSPACE_DIR="/workspace"
 LOG_FILE="$WORKSPACE_DIR/run.log"
 
@@ -210,6 +210,22 @@ conda activate BindCraft || {
     echo "[ERROR] Failed to activate BindCraft environment"
     exit 1
 }
+
+############## JAX/XLA Optimization Settings ##############
+
+echo "[OPTIMIZATION] Configuring JAX persistent compilation cache..."
+
+JAX_CACHE_DIR="$WORKSPACE_DIR/jax_compilation_cache"
+mkdir -p "$JAX_CACHE_DIR"
+
+export JAX_COMPILATION_CACHE_DIR="$JAX_CACHE_DIR"
+export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0
+export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
+
+# Optional harmless-ish XLA flag
+export XLA_FLAGS="--xla_gpu_enable_fast_min_max=true"
+
+echo "[OPTIMIZATION] JAX cache: $JAX_CACHE_DIR"
 
 # Create modified settings files for each GPU
 echo "[STEP] Preparing configuration files for each GPU instance..."

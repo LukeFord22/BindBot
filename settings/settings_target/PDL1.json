@@ -1,7 +1,7 @@
 {
     "design_path": "/workspace/outputs/PDL1_designs",
     "binder_name": "PDL1",
-    "starting_pdb": "/app/Inputs/PDL1.pdb",
+    "starting_pdb": "/workspace/BindBot/Inputs/PDL1.pdb",
     "chains": "A",
     "target_hotspot_residues": "56",
     "lengths": [65, 150]

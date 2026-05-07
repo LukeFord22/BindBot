@@ -8,12 +8,12 @@ set -euo pipefail
 
 echo "=== BindBot Base Environment Entrypoint ==="
 echo "[INFO] Current directory: $(pwd)"
-echo "[INFO] Directory contents: $(ls -la /app 2>/dev/null | wc -l) items"
+echo "[INFO] Directory contents: $(ls -la /workspace/BindBot 2>/dev/null | wc -l) items"
 
 # Configuration from environment variables
 REPO_URL="${GITHUB_REPO:-https://github.com/lukeford22/BindBot.git}"
 BRANCH="${GITHUB_BRANCH:-main}"
-APP_DIR="/app"
+APP_DIR="/workspace/BindBot"
 
 # Increase file descriptor limits (BindCraft can open many files)
 if command -v prlimit >/dev/null 2>&1; then
@@ -98,14 +98,14 @@ else
     fi
 fi
 
-# Create symlinks from /data to /app so code finds binaries/weights
+# Create symlinks from /data to /workspace/BindBot so code finds binaries/weights
 echo "[STEP] Setting up symlinks for baked-in resources..."
 cd "$APP_DIR"
 
 # Link params if not already present
 if [ ! -e "$APP_DIR/params" ]; then
     ln -sf /data/params "$APP_DIR/params"
-    echo "[INFO] Linked /data/params -> /app/params"
+    echo "[INFO] Linked /data/params -> /workspace/BindBot/params"
 fi
 
 # Link functions if not already present (prefer repo version, fallback to baked)
@@ -113,14 +113,14 @@ if [ ! -d "$APP_DIR/functions" ] || [ ! "$(ls -A $APP_DIR/functions 2>/dev/null)
     # No functions in repo, use baked version
     rm -rf "$APP_DIR/functions"
     ln -sf /data/functions "$APP_DIR/functions"
-    echo "[INFO] Linked /data/functions -> /app/functions (using baked binaries)"
+    echo "[INFO] Linked /data/functions -> /workspace/BindBot/functions (using baked binaries)"
 else
     echo "[INFO] Using functions/ from repository"
     # Still ensure binaries from /data are available if repo is missing them
     for binary in dssp sc FASPR DAlphaBall.gcc; do
         if [ ! -f "$APP_DIR/functions/$binary" ] && [ -f "/data/functions/$binary" ]; then
             ln -sf "/data/functions/$binary" "$APP_DIR/functions/$binary"
-            echo "[INFO] Linked /data/functions/$binary -> /app/functions/$binary"
+            echo "[INFO] Linked /data/functions/$binary -> /workspace/BindBot/functions/$binary"
         fi
     done
 fi

@@ -1,11 +1,8 @@
 {
     "design_path": "/workspace/outputs/IgG_Fc_designs",
     "binder_name": "IgG-Binder",
-    "starting_pdb": "/app/Inputs/IgG_Fc.pdb",
+    "starting_pdb": "/workspace/BindBot/Inputs/IgG_Fc.pdb",
     "chains": "C",
     "target_hotspot_residues": "253,310,311,315,317,430,434,435",
-    "lengths": [
-        60,
-        90
-    ]
+    "lengths": [75]
 }

@@ -110,7 +110,7 @@ ENV PATH=${CONDA_DIR}/envs/BindCraft/bin:${CONDA_DIR}/bin:${PATH} \
     PYTHONUNBUFFERED=1
 
 # Point BindCraft to persistent data locations
-ENV BINDCRAFT_HOME=/app \
+ENV BINDCRAFT_HOME=/workspace/BindBot \
     BINDCRAFT_PARAMS=/data/params \
     BINDCRAFT_FUNCTIONS=/data/functions
 
@@ -126,8 +126,9 @@ ENV GITHUB_REPO=https://github.com/lukeford22/BindBot.git \
 # ENTRYPOINT - CLONE REPO AT RUNTIME
 # ============================================
 
-# Create empty /app directory (will be populated at runtime)
-WORKDIR /app
+# Create /workspace and BindBot directory (will be populated at runtime)
+RUN mkdir -p /workspace/BindBot
+WORKDIR /workspace/BindBot
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/bindbot-entrypoint.sh
