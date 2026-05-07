@@ -379,8 +379,10 @@ echo "[MONITORING] Waiting for all processes to complete..."
 echo "[MONITORING] Monitor individual GPU logs at: $WORKSPACE_DIR/bindcraft_gpu*.log"
 echo ""
 
-# Monitor processes
+# Monitor processes and launch parallel post-processing
 FAILED=0
+POST_PROCESS_PIDS=()
+
 for i in "${!PIDS[@]}"; do
     pid=${PIDS[$i]}
     gpu_id=$i
@@ -388,6 +390,22 @@ for i in "${!PIDS[@]}"; do
     echo "[MONITORING] Waiting for GPU $gpu_id (PID $pid)..."
     if wait "$pid"; then
         echo "[SUCCESS] GPU $gpu_id completed successfully"
+
+        # Launch post-processing for this GPU in the background
+        GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+        if [ -d "$GPU_OUTPUT_DIR" ]; then
+            echo "[POST-PROCESS] Starting parallel post-processing for GPU $gpu_id output..."
+
+            # Run post-processing in background
+            (
+                run_post_processing "$GPU_OUTPUT_DIR"
+                echo "[POST-PROCESS] GPU $gpu_id post-processing complete"
+            ) > "$WORKSPACE_DIR/post_process_gpu${gpu_id}.log" 2>&1 &
+
+            # Store post-processing PID
+            POST_PROCESS_PIDS+=($!)
+            echo "[POST-PROCESS] GPU $gpu_id: Post-processing PID ${POST_PROCESS_PIDS[-1]}"
+        fi
     else
         exit_code=$?
         echo "[ERROR] GPU $gpu_id failed with exit code $exit_code"
@@ -395,6 +413,34 @@ for i in "${!PIDS[@]}"; do
         FAILED=$((FAILED + 1))
     fi
 done
+
+# Wait for all post-processing to complete
+if [ ${#POST_PROCESS_PIDS[@]} -gt 0 ]; then
+    echo ""
+    echo "[POST-PROCESS] Waiting for all post-processing jobs to complete..."
+    POST_PROCESS_FAILED=0
+
+    for i in "${!POST_PROCESS_PIDS[@]}"; do
+        pp_pid=${POST_PROCESS_PIDS[$i]}
+        gpu_id=$i
+
+        echo "[POST-PROCESS] Waiting for GPU $gpu_id post-processing (PID $pp_pid)..."
+        if wait "$pp_pid"; then
+            echo "[POST-PROCESS] GPU $gpu_id post-processing succeeded"
+        else
+            echo "[POST-PROCESS] GPU $gpu_id post-processing failed"
+            echo "[POST-PROCESS] Check log: $WORKSPACE_DIR/post_process_gpu${gpu_id}.log"
+            POST_PROCESS_FAILED=$((POST_PROCESS_FAILED + 1))
+        fi
+    done
+
+    if [ "$POST_PROCESS_FAILED" -gt 0 ]; then
+        echo "[WARN] $POST_PROCESS_FAILED post-processing job(s) failed"
+        echo "[WARN] Continuing with merge, but some post-processed data may be missing"
+    else
+        echo "[SUCCESS] All post-processing jobs completed successfully"
+    fi
+fi
 
 echo ""
 echo "=== [SUMMARY] ==="
@@ -439,9 +485,9 @@ if [ "$FAILED" -eq 0 ]; then
         echo "[MERGE] Total files in merged $subdir: $file_count"
     done
 
-    # Merge CSV files
+    # Merge CSV files (including post-processing outputs)
     echo "[MERGE] Merging CSV statistics..."
-    for csv_name in filter_pass_fail.csv trajectory_stats.csv accepted_mpnn_full_stats.csv rejected_mpnn_full_stats.csv; do
+    for csv_name in filter_pass_fail.csv trajectory_stats.csv accepted_mpnn_full_stats.csv rejected_mpnn_full_stats.csv filtered_designs.csv multi_state_scores.csv; do
         MERGED_CSV="$MERGED_DIR/$csv_name"
         first_file=true
 
@@ -457,6 +503,10 @@ if [ "$FAILED" -eq 0 ]; then
                 fi
             fi
         done
+
+        if [ -f "$MERGED_CSV" ]; then
+            echo "[MERGE]   Merged: $csv_name"
+        fi
     done
 
     # Clean up GPU-specific directories
@@ -482,8 +532,10 @@ if [ "$FAILED" -eq 0 ]; then
         fi
     done
 
-    # Run post-processing pipeline features
-    run_post_processing "$MERGED_DIR"
+    # Post-processing already completed in parallel for each GPU
+    echo ""
+    echo "[INFO] Post-processing was completed in parallel for each GPU's output"
+    echo "[INFO] Post-processed results (filtered_designs.csv, multi_state_scores.csv) have been merged"
 
 else
     echo "[ERROR] $FAILED out of $NUM_GPUS instances failed"
