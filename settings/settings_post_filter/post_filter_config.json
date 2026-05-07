@@ -1,0 +1,82 @@
+{
+  "description": "Post-filtering configuration for BindCraft accepted designs (developability-focused scoring)",
+  "_philosophy": "BindCraft already filtered for binding quality. Post-filter scores DEVELOPABILITY: protease resistance, aggregation risk, manufacturability. Use severe thresholds for rejection.",
+
+  "_comment_scoring_weights": "Developability score components (0-100 scale, higher is better)",
+  "scoring_weights": {
+    "exposed_protease_motifs": 0.15,
+    "exposed_kr_fraction": 0.12,
+    "histidine_fraction": 0.05,
+    "his_scaffold_cluster_size": 0.08,
+    "max_loop_length": 0.10,
+    "low_plddt_patch_length": 0.08,
+    "largest_hydrophobic_scaffold_patch": 0.18,
+    "exposed_hydrophobic_scaffold_fraction": 0.12,
+    "hydrophobic_patch_count": 0.05,
+    "max_positive_scaffold_cluster": 0.03,
+    "max_negative_scaffold_cluster": 0.03,
+    "buried_unsatisfied_polar_count": 0.03,
+    "self_binding_risk_score": 0.05,
+    "min_packing_density": 0.03,
+    "average_packing_density": 0.03,
+    "sequence_redundancy_penalty": 0.05
+  },
+  "_note_scoring": "Sum of weights should equal 1.0. These are developability metrics - BindCraft metrics (pLDDT, iPAE, contacts) are NOT heavily weighted",
+
+  "_comment_rejection": "Only reject designs with SEVERE issues. Use scoring for everything else.",
+
+  "check_protease_motifs": true,
+  "protease_motifs": ["KR","RR","RXXR","KXK","RXR","KK","RK","FY","YW","WL","LL","FF","YY"],
+  "max_exposed_protease_motifs": 4,
+  "protease_exposure_threshold": 0.3,
+  "_note_protease": "Affects developability score. Rejection: only if >=4 severely exposed motifs",
+
+  "check_exposed_kr": true,
+  "kr_exposure_threshold": 0.25,
+  "max_exposed_kr_fraction": 0.35,
+  "_note_kr": "Affects developability score. Rejection: only if >35% of residues are exposed K/R",
+
+  "check_histidine": true,
+  "max_histidine_count": 10,
+  "max_histidine_spatial_cluster": 6,
+  "histidine_cluster_distance": 10.0,
+  "_note_histidine": "Affects developability score. Rejection: only if >=6 His in spatial cluster or >10 total His",
+
+  "check_flexible_loops": true,
+  "max_loop_length": 25,
+  "_note_loops": "Affects developability score. Rejection: only if loop >25 residues",
+
+  "check_plddt_patches": true,
+  "low_plddt_threshold": 70,
+  "max_low_plddt_patch_length": 15,
+  "_note_plddt_patches": "Affects developability score. Rejection: only if patch >15 residues (BindCraft already filtered mean pLDDT)",
+
+  "check_interface_quality": true,
+  "max_interface_pae": 12.0,
+  "min_interface_contacts": 10,
+  "_note_interface": "Minimal weight in developability score (BindCraft did this). Rejection: sanity check only if iPAE >12 or contacts <10",
+
+  "check_aggregation": true,
+  "max_exposed_hydrophobic_scaffold_fraction": 0.65,
+  "max_hydrophobic_patch_size": 15,
+  "hydrophobic_patch_distance": 10.0,
+  "_note_aggregation": "Major developability scoring factor. Rejection: only if >65% exposed hydrophobic or patch >15 residues",
+
+  "check_charge_patches": true,
+  "max_charge_spatial_cluster": 10,
+  "charge_cluster_distance": 12.0,
+  "_note_charge": "Affects developability score. Rejection: only if >=10 charged residues clustered",
+
+  "check_buried_polars": true,
+  "max_buried_unsatisfied_polars": 8,
+  "_note_buried_polars": "Affects developability score. Rejection: only if >=8 buried unsatisfied polars",
+
+  "check_self_binding_risk": true,
+  "max_self_binding_risk": 0.85,
+  "_note_self_binding": "Affects developability score. Rejection: only if risk >0.85",
+
+  "check_packing_quality": true,
+  "min_packing_density": 4,
+  "_note_packing": "Affects developability score. Rejection: only if min density <4"
+
+}

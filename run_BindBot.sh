@@ -11,11 +11,11 @@ set -e
 #############################################
 
 # Required: Path to your settings file (target configuration)
-SETTINGS_FILE="settings_target/PDL1.json"
+SETTINGS_FILE="settings/settings_target/PDL1.json"
 
 # Optional: Path to filters and advanced settings
-FILTERS_FILE="settings_filters/default_filters.json"
-ADVANCED_FILE="settings_advanced/default_4stage_multimer.json"
+FILTERS_FILE="settings/settings_filters/default_filters.json"
+ADVANCED_FILE="settings/settings_advanced/default_4stage_multimer.json"
 
 # Total number of designs to generate (will be split across GPUs)
 TOTAL_DESIGNS=10
@@ -25,12 +25,145 @@ NO_PYROSETTA=true
 VERBOSE=true
 
 #############################################
+### NEW PIPELINE FEATURES
+#############################################
+
+# Post-filtering: Apply additional biochemical/structural filters to accepted designs
+ENABLE_POST_FILTERING=false
+POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
+
+# Multi-state validation: Test binders against multiple target conformations
+ENABLE_MULTI_STATE=false
+MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
+
+# Custom AF2 losses: Compact/rigid binder optimization
+ENABLE_CUSTOM_LOSSES=false
+CUSTOM_LOSSES_CONFIG="settings/settings_losses/custom_af2_losses.json"
+
+#############################################
 ### END CONFIG - Don't edit below this line
 #############################################
 
 BINDCRAFT_DIR="/app"
 WORKSPACE_DIR="/workspace"
 LOG_FILE="$WORKSPACE_DIR/run.log"
+
+#############################################
+### PIPELINE FUNCTIONS
+#############################################
+
+# Function to apply pre-processing (custom losses)
+apply_preprocessing() {
+    echo ""
+    echo "=== [PRE-PROCESSING] Applying pipeline enhancements ==="
+
+    # Check custom AF2 losses integration
+    if [ "$ENABLE_CUSTOM_LOSSES" = true ]; then
+        echo "[STEP] Checking custom AF2 losses integration..."
+
+        local losses_config="$BINDCRAFT_DIR/$CUSTOM_LOSSES_CONFIG"
+
+        if [ ! -f "$losses_config" ]; then
+            echo "[WARN] Custom losses config not found: $losses_config"
+            echo "[WARN] Skipping custom losses"
+        else
+            # Check if integration is applied
+            python "$BINDCRAFT_DIR/extras/integrate_custom_losses.py" --check | grep -q "APPLIED"
+            if [ $? -eq 0 ]; then
+                echo "[SUCCESS] Custom AF2 losses integration detected"
+                echo "[INFO] Losses will be applied from: $losses_config"
+            else
+                echo "[WARN] Custom AF2 losses integration not applied"
+                echo "[WARN] Run: python integrate_custom_losses.py --apply"
+                echo "[WARN] Or see --manual-instructions for integration guide"
+            fi
+        fi
+    fi
+
+    echo "[PRE-PROCESSING] Complete"
+    echo ""
+}
+
+# Function to run post-processing pipeline
+run_post_processing() {
+    local output_dir="$1"
+
+    echo ""
+    echo "=== [POST-PROCESSING] Running pipeline enhancements ==="
+    echo "[INFO] Pipeline flow: BindCraft → Post-filter → Multi-state validation"
+    echo ""
+
+    # STEP 1: Post-filtering (if enabled)
+    local post_filter_success=false
+    if [ "$ENABLE_POST_FILTERING" = true ]; then
+        echo "[STEP 1/2] Running post-filtering on accepted designs..."
+
+        local filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
+
+        if [ ! -f "$filter_config" ]; then
+            echo "[WARN] Post-filter config not found: $filter_config"
+            echo "[WARN] Skipping post-filtering"
+        else
+            python "$BINDCRAFT_DIR/extras/post_filter_designs.py" \
+                --config "$filter_config" \
+                --input "$output_dir" \
+                --output "$output_dir" || {
+                echo "[ERROR] Post-filtering failed"
+                echo "[WARN] Multi-state validation will use original BindCraft designs"
+            }
+
+            if [ -f "$output_dir/filtered_designs.csv" ]; then
+                num_filtered=$(wc -l < "$output_dir/filtered_designs.csv")
+                num_filtered=$((num_filtered - 1))  # Subtract header
+                echo "[SUCCESS] Post-filtering complete: $num_filtered designs passed"
+                post_filter_success=true
+            fi
+        fi
+    else
+        echo "[STEP 1/2] Post-filtering disabled, skipping..."
+    fi
+
+    # STEP 2: Multi-state validation (if enabled)
+    # IMPORTANT: Reads from filtered_designs.csv if post-filter was successful,
+    # otherwise falls back to accepted_mpnn_full_stats.csv
+    if [ "$ENABLE_MULTI_STATE" = true ]; then
+        echo ""
+        if [ "$post_filter_success" = true ]; then
+            echo "[STEP 2/2] Running multi-state validation on POST-FILTERED designs..."
+            echo "[INFO] Input source: filtered_designs.csv (post-filter output)"
+        else
+            echo "[STEP 2/2] Running multi-state validation on ORIGINAL accepted designs..."
+            echo "[INFO] Input source: accepted_mpnn_full_stats.csv (BindCraft output)"
+        fi
+
+        local validation_config="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
+
+        if [ ! -f "$validation_config" ]; then
+            echo "[WARN] Multi-state validation config not found: $validation_config"
+            echo "[WARN] Skipping multi-state validation"
+        else
+            python "$BINDCRAFT_DIR/extras/multi_state_validate.py" \
+                --config "$validation_config" \
+                --input "$output_dir" \
+                --output "$output_dir" || {
+                echo "[ERROR] Multi-state validation failed"
+            }
+
+            if [ -f "$output_dir/multi_state_scores.csv" ]; then
+                num_validated=$(wc -l < "$output_dir/multi_state_scores.csv")
+                num_validated=$((num_validated - 1))  # Subtract header
+                echo "[SUCCESS] Multi-state validation complete: $num_validated designs tested"
+            fi
+        fi
+    else
+        echo ""
+        echo "[STEP 2/2] Multi-state validation disabled, skipping..."
+    fi
+
+    echo ""
+    echo "[POST-PROCESSING] Complete"
+    echo ""
+}
 
 # Logging setup
 mkdir -p "$WORKSPACE_DIR"
@@ -110,6 +243,9 @@ conda activate BindCraft || {
     exit 1
 }
 
+# Apply pre-processing enhancements
+apply_preprocessing
+
 # Create modified settings files for each GPU
 echo "[STEP] Preparing configuration files for each GPU instance..."
 TEMP_DIR="$WORKSPACE_DIR/multi_gpu_temp"
@@ -120,7 +256,9 @@ ORIGINAL_SETTINGS=$(cat "$SETTINGS_FILE")
 BINDER_NAME=$(echo "$ORIGINAL_SETTINGS" | python -c "import sys, json; print(json.load(sys.stdin)['binder_name'])" 2>/dev/null || echo "binder")
 BASE_DESIGN_PATH=$(echo "$ORIGINAL_SETTINGS" | python -c "import sys, json; print(json.load(sys.stdin).get('design_path', '/workspace/outputs'))" 2>/dev/null || echo "/workspace/outputs")
 
-# Special handling for single GPU - no need to split
+
+############## Handling for single GPU #############
+
 if [ "$NUM_GPUS" -eq 1 ]; then
     echo "[INFO] Single GPU detected - running standard BindCraft without splitting"
 
@@ -161,12 +299,17 @@ with open('$SINGLE_GPU_SETTINGS', 'w') as f:
         echo "[INFO] Accepted designs: $num_accepted"
     fi
 
+    # Run post-processing pipeline features
+    run_post_processing "$BASE_DESIGN_PATH"
+
     echo ""
     echo "=== [FINISHED] $(date) ==="
     exit 0
 fi
 
-# Multi-GPU path: Launch BindCraft instances for each GPU
+
+############# Multi-GPU path: Launch BindCraft instances for each GPU #############
+
 PIDS=()
 echo "[STEP] Launching BindCraft instances across $NUM_GPUS GPU(s)..."
 
@@ -338,6 +481,9 @@ if [ "$FAILED" -eq 0 ]; then
             echo "  $subdir: $count PDB files"
         fi
     done
+
+    # Run post-processing pipeline features
+    run_post_processing "$MERGED_DIR"
 
 else
     echo "[ERROR] $FAILED out of $NUM_GPUS instances failed"

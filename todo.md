@@ -2,33 +2,14 @@ Parallelize Bindraft instances (Running Parallel Instances)
 
 Integrate pDockQ2 or PI_Score. These metrics look specifically at the interface density and chemical complementarity (hydrophobicity, hydrogen bonds).
 
-Add settings for pH, protease, and temp selection
-
-AF2 loss should control:
-“Shape and physics tendencies”
-
-Examples:
-compactness
-interface confidence
-rigidity
-multi-state compatibility
-loop minimization
-buried surface area
-
-Post-MPNN filters should control:
-“Sequence chemistry preferences”
-
-Examples:
-protease motifs
-pH-sensitive residues
-aggregation risk
-disorder
-charge balance
-amino acid composition
-
-
 Use tools like MaSIF or PeSTo (surface fingerprinting) before running BindCraft to identify "druggable" patches.
 
-Automatically pipe the top 50 BindCraft designs through Chai-1 and Boltz-2.
+AF2 loss control
+
+multi-state validation
+
+Automatically pipe the top BindCraft designs through Chai-1 and Boltz-2.
 
 checks if the binder sequence would also bind to common "off-targets"
+
+filter for pH, protease, and temp selection
