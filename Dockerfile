@@ -97,7 +97,7 @@ RUN bash -lc 'set -e && \
 RUN test -f /data/params/params_model_5_ptm.npz || { echo "AlphaFold weights not found!"; exit 1; }
 RUN test -x /data/functions/dssp || { echo "DSSP binary not executable!"; exit 1; }
 
-# Remove installer script (no longer needed, saves space)
+# Remove installer script (no longer needed)
 RUN rm -f /data/install.sh
 
 # ============================================

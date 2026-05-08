@@ -4,7 +4,8 @@
 # Edit the CONFIG section below, then just run: ./run_bindcraft.sh
 #
 
-set -e
+set -euo pipefail
+
 
 #############################################
 ### CONFIG - EDIT THESE SETTINGS
@@ -194,15 +195,6 @@ fi
 echo "[INFO] GPU Information:"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
-# Calculate designs per GPU
-DESIGNS_PER_GPU=$((TOTAL_DESIGNS / NUM_GPUS))
-REMAINDER=$((TOTAL_DESIGNS % NUM_GPUS))
-
-echo "[INFO] Designs per GPU: $DESIGNS_PER_GPU (base)"
-if [ "$REMAINDER" -gt 0 ]; then
-    echo "[INFO] First $REMAINDER GPU(s) will handle 1 extra design"
-fi
-
 # Activate conda environment
 echo "[STEP] Activating BindCraft conda environment..."
 source /miniforge3/etc/profile.d/conda.sh
@@ -290,51 +282,53 @@ with open('$SINGLE_GPU_SETTINGS', 'w') as f:
 fi
 
 
-############# Multi-GPU path: Launch BindCraft workers with dynamic work queue #############
+############# Multi-GPU path: Hybrid approach with shared counter #############
 
-echo "[STEP] Launching BindCraft instances across $NUM_GPUS GPU(s) with WORK QUEUE MODE..."
-echo "[INFO] Dynamic load balancing: All GPUs write to shared directory and race to complete target"
-echo "[INFO] Fast GPUs automatically do more trajectories - no GPU will lag behind!"
+echo "[STEP] Launching BindCraft instances across $NUM_GPUS GPU(s) with HYBRID WORK QUEUE..."
+echo "[INFO] Each GPU writes to separate directory (no race conditions)"
+echo "[INFO] Shared counter enables dynamic load balancing (fast GPUs do more work)"
+echo "[INFO] Wrapper monitors all GPU outputs and stops when total target reached"
 echo ""
 
-# Create shared output directory (all GPUs write here)
-SHARED_OUTPUT_DIR="$BASE_DESIGN_PATH"
-mkdir -p "$SHARED_OUTPUT_DIR"
+# Create shared counter directory
+COUNTER_DIR="$WORKSPACE_DIR/gpu_sync"
+mkdir -p "$COUNTER_DIR"
+echo "0" > "$COUNTER_DIR/total_accepted.txt"
+echo "running" > "$COUNTER_DIR/status.txt"
 
-# Create shared settings file pointing to unified output
-SHARED_SETTINGS_FILE="$TEMP_DIR/settings_shared.json"
-python -c "
+# Launch BindCraft on each GPU with separate output directory
+PIDS=()
+for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
+    # Create GPU-specific output directory
+    GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+    mkdir -p "$GPU_OUTPUT_DIR"
+
+    # Create GPU-specific settings file with high target (will be stopped by wrapper)
+    GPU_SETTINGS_FILE="$TEMP_DIR/settings_gpu${gpu_id}.json"
+    python -c "
 import json
 with open('$SETTINGS_FILE', 'r') as f:
     settings = json.load(f)
 
-settings['design_path'] = '$SHARED_OUTPUT_DIR'
-settings['number_of_final_designs'] = $TOTAL_DESIGNS
+settings['design_path'] = '$GPU_OUTPUT_DIR'
+settings['number_of_final_designs'] = 999999  # Unlimited - wrapper will stop it
+settings['binder_name'] = '${BINDER_NAME}_gpu${gpu_id}'
 
-with open('$SHARED_SETTINGS_FILE', 'w') as f:
+with open('$GPU_SETTINGS_FILE', 'w') as f:
     json.dump(settings, f, indent=2)
 " || {
-    echo "[ERROR] Failed to create shared settings file"
-    exit 1
-}
+        echo "[ERROR] Failed to create settings for GPU $gpu_id"
+        exit 1
+    }
 
-echo "[SETTINGS] Shared output directory: $SHARED_OUTPUT_DIR"
-echo "[SETTINGS] Target designs: $TOTAL_DESIGNS"
-echo ""
-
-# Launch BindCraft on each GPU (all writing to shared directory)
-PIDS=()
-for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
     GPU_LOG="$WORKSPACE_DIR/bindcraft_gpu${gpu_id}.log"
-
-    echo "[LAUNCH] Starting BindCraft on GPU $gpu_id (log: $GPU_LOG)"
+    echo "[LAUNCH] GPU $gpu_id: Output -> $GPU_OUTPUT_DIR"
 
     # Launch BindCraft in background
-    # BindCraft will keep running until check_accepted_designs() sees enough designs in shared Accepted/ folder
     (
         cd "$BINDCRAFT_DIR"
         CUDA_VISIBLE_DEVICES=$gpu_id python bindcraft.py \
-            --settings "$SHARED_SETTINGS_FILE" \
+            --settings "$GPU_SETTINGS_FILE" \
             --filters "$FILTERS_FILE" \
             --advanced "$ADVANCED_FILE" \
             2>&1 | sed "s/^/[GPU $gpu_id] /"
@@ -348,13 +342,12 @@ echo ""
 echo "[INFO] All $NUM_GPUS BindCraft instances launched"
 echo "[INFO] Process PIDs: ${PIDS[*]}"
 echo ""
-echo "[MONITORING] All GPUs racing to complete $TOTAL_DESIGNS designs..."
-echo "[MONITORING] Monitor individual GPU logs: $WORKSPACE_DIR/bindcraft_gpu*.log"
-echo "[MONITORING] Monitor shared output: $SHARED_OUTPUT_DIR"
+echo "[MONITORING] Wrapper monitoring all GPUs with shared counter..."
+echo "[MONITORING] Individual GPU logs: $WORKSPACE_DIR/bindcraft_gpu*.log"
 echo ""
 
-# Periodic monitoring loop (show progress every 30 seconds)
-MONITOR_INTERVAL=30
+# Monitoring loop with shared counter
+MONITOR_INTERVAL=10  # Check every 10 seconds
 while true; do
     # Check if any workers are still running
     STILL_RUNNING=false
@@ -365,21 +358,58 @@ while true; do
         fi
     done
 
-    # If all workers finished, break
+    # Count total accepted designs across all GPU directories
+    TOTAL_ACCEPTED=0
+    for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
+        GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+        if [ -d "$GPU_OUTPUT_DIR/Accepted" ]; then
+            GPU_ACCEPTED=$(find "$GPU_OUTPUT_DIR/Accepted" -name "*.pdb" -type f 2>/dev/null | wc -l)
+            TOTAL_ACCEPTED=$((TOTAL_ACCEPTED + GPU_ACCEPTED))
+        fi
+    done
+
+    # Update shared counter (with file locking)
+    (
+        flock -x 200
+        echo "$TOTAL_ACCEPTED" > "$COUNTER_DIR/total_accepted.txt"
+    ) 200>"$COUNTER_DIR/counter.lock"
+
+    echo "[PROGRESS] Accepted designs: $TOTAL_ACCEPTED / $TOTAL_DESIGNS (across all GPUs)"
+
+    # If target reached, signal all GPUs to stop
+    if [ "$TOTAL_ACCEPTED" -ge "$TOTAL_DESIGNS" ]; then
+        echo ""
+        echo "[TARGET REACHED] $TOTAL_ACCEPTED designs accepted - stopping all GPUs..."
+        echo "stopped" > "$COUNTER_DIR/status.txt"
+
+        # Send SIGTERM to all running BindCraft processes
+        for pid in "${PIDS[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "[STOP] Sending SIGTERM to PID $pid"
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+        done
+
+        # Wait a bit for graceful shutdown
+        sleep 20
+
+        # Force kill any remaining processes
+        for pid in "${PIDS[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "[STOP] Force killing PID $pid"
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+
+        break
+    fi
+
+    # If all processes finished naturally, break
     if [ "$STILL_RUNNING" = false ]; then
         echo ""
         echo "[MONITORING] All GPU processes have finished"
         break
     fi
-
-    # Show current progress by counting designs in shared Accepted folder
-    if [ -d "$SHARED_OUTPUT_DIR/Accepted" ]; then
-        CURRENT_ACCEPTED=$(find "$SHARED_OUTPUT_DIR/Accepted" -name "*.pdb" -type f 2>/dev/null | wc -l)
-    else
-        CURRENT_ACCEPTED=0
-    fi
-
-    echo "[PROGRESS] Accepted designs: $CURRENT_ACCEPTED / $TOTAL_DESIGNS"
 
     sleep $MONITOR_INTERVAL
 done
@@ -405,14 +435,63 @@ for i in "${!PIDS[@]}"; do
 done
 
 echo ""
+echo "=== [MERGE] Merging results from all GPUs ==="
 
-# Parallel post-processing across GPUs (split design list)
-echo "[POST-PROCESS] Running parallel post-processing across $NUM_GPUS GPU(s)..."
-echo "[POST-PROCESS] Splitting design list for parallel processing..."
+# Create merged output directory
+MERGED_DIR="$BASE_DESIGN_PATH"
+mkdir -p "$MERGED_DIR"
 
-# First run post-filter sequentially (it's fast, just filters CSV)
+# Merge subdirectories (PDB files)
+for subdir in Accepted Rejected Trajectory; do
+    echo "[MERGE] Merging $subdir..."
+    MERGED_SUBDIR="$MERGED_DIR/$subdir"
+    mkdir -p "$MERGED_SUBDIR"
+
+    file_count=0
+    for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
+        GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+        gpu_subdir="$GPU_OUTPUT_DIR/$subdir"
+        if [ -d "$gpu_subdir" ]; then
+            gpu_files=$(find "$gpu_subdir" -type f 2>/dev/null | wc -l)
+            if [ "$gpu_files" -gt 0 ]; then
+                cp -r "$gpu_subdir"/* "$MERGED_SUBDIR/" 2>/dev/null || true
+                file_count=$((file_count + gpu_files))
+            fi
+        fi
+    done
+    echo "[MERGE] Total files in merged $subdir: $file_count"
+done
+
+# Merge CSV files
+echo "[MERGE] Merging CSV statistics..."
+for csv_name in trajectory_stats.csv mpnn_design_stats.csv final_design_stats.csv; do
+    MERGED_CSV="$MERGED_DIR/$csv_name"
+    first_file=true
+
+    for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
+        GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+        gpu_csv="$GPU_OUTPUT_DIR/$csv_name"
+        if [ -f "$gpu_csv" ]; then
+            if $first_file; then
+                cp "$gpu_csv" "$MERGED_CSV"
+                first_file=false
+            else
+                tail -n +2 "$gpu_csv" >> "$MERGED_CSV"
+            fi
+        fi
+    done
+
+    if [ -f "$MERGED_CSV" ]; then
+        echo "[MERGE]   Merged: $csv_name"
+    fi
+done
+
+echo "[MERGE] Merge complete!"
+echo ""
+
+# Post-filtering (fast, sequential is fine)
 if [ "$ENABLE_POST_FILTERING" = true ]; then
-    echo "[POST-FILTER] Running post-filtering on all designs..."
+    echo "[POST-FILTER] Running post-filtering on merged designs..."
 
     filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
     if [ ! -f "$filter_config" ]; then
@@ -420,19 +499,19 @@ if [ "$ENABLE_POST_FILTERING" = true ]; then
     else
         python "$BINDCRAFT_DIR/extras/post_filter_designs.py" \
             --config "$filter_config" \
-            --input "$SHARED_OUTPUT_DIR" \
-            --output "$SHARED_OUTPUT_DIR" || {
+            --input "$MERGED_DIR" \
+            --output "$MERGED_DIR" || {
             echo "[ERROR] Post-filtering failed"
         }
 
-        if [ -f "$SHARED_OUTPUT_DIR/filtered_designs.csv" ]; then
-            num_filtered=$(tail -n +2 "$SHARED_OUTPUT_DIR/filtered_designs.csv" 2>/dev/null | wc -l || echo 0)
+        if [ -f "$MERGED_DIR/filtered_designs.csv" ]; then
+            num_filtered=$(tail -n +2 "$MERGED_DIR/filtered_designs.csv" 2>/dev/null | wc -l || echo 0)
             echo "[SUCCESS] Post-filtering complete: $num_filtered designs passed"
         fi
     fi
 fi
 
-# Multi-state validation in parallel across GPUs
+# Multi-state validation in PARALLEL across GPUs
 if [ "$ENABLE_MULTI_STATE" = true ]; then
     echo "[MULTI-STATE] Splitting validation workload across $NUM_GPUS GPU(s)..."
 
@@ -441,11 +520,11 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
         echo "[WARN] Multi-state validation config not found: $validation_config"
     else
         # Determine input CSV (filtered or original)
-        if [ -f "$SHARED_OUTPUT_DIR/filtered_designs.csv" ]; then
-            INPUT_CSV="$SHARED_OUTPUT_DIR/filtered_designs.csv"
+        if [ -f "$MERGED_DIR/filtered_designs.csv" ]; then
+            INPUT_CSV="$MERGED_DIR/filtered_designs.csv"
             echo "[INFO] Validating post-filtered designs"
-        elif [ -f "$SHARED_OUTPUT_DIR/final_design_stats.csv" ]; then
-            INPUT_CSV="$SHARED_OUTPUT_DIR/final_design_stats.csv"
+        elif [ -f "$MERGED_DIR/final_design_stats.csv" ]; then
+            INPUT_CSV="$MERGED_DIR/final_design_stats.csv"
             echo "[INFO] Validating BindCraft final designs"
         else
             echo "[WARN] No design CSV found, skipping multi-state validation"
@@ -455,8 +534,8 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
         if [ -n "$INPUT_CSV" ]; then
             # Split CSV for parallel processing
             TOTAL_DESIGNS_TO_VALIDATE=$(tail -n +2 "$INPUT_CSV" 2>/dev/null | wc -l || echo 0)
-            DESIGNS_PER_GPU=$((TOTAL_DESIGNS_TO_VALIDATE / NUM_GPUS))
-            REMAINDER=$((TOTAL_DESIGNS_TO_VALIDATE % NUM_GPUS))
+            VAL_DESIGNS_PER_GPU=$((TOTAL_DESIGNS_TO_VALIDATE / NUM_GPUS))
+            VAL_REMAINDER=$((TOTAL_DESIGNS_TO_VALIDATE % NUM_GPUS))
 
             echo "[INFO] Splitting $TOTAL_DESIGNS_TO_VALIDATE designs across $NUM_GPUS GPUs"
 
@@ -466,17 +545,17 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
 
             for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
                 # Calculate lines for this GPU
-                if [ "$gpu_id" -lt "$REMAINDER" ]; then
-                    GPU_DESIGNS=$((DESIGNS_PER_GPU + 1))
+                if [ "$gpu_id" -lt "$VAL_REMAINDER" ]; then
+                    GPU_VAL_DESIGNS=$((VAL_DESIGNS_PER_GPU + 1))
                 else
-                    GPU_DESIGNS=$DESIGNS_PER_GPU
+                    GPU_VAL_DESIGNS=$VAL_DESIGNS_PER_GPU
                 fi
 
-                if [ "$GPU_DESIGNS" -eq 0 ]; then
+                if [ "$GPU_VAL_DESIGNS" -eq 0 ]; then
                     continue
                 fi
 
-                END_LINE=$((START_LINE + GPU_DESIGNS - 1))
+                END_LINE=$((START_LINE + GPU_VAL_DESIGNS - 1))
 
                 # Create GPU-specific CSV split
                 GPU_CSV="$TEMP_DIR/designs_gpu${gpu_id}.csv"
@@ -487,20 +566,30 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
                 GPU_VALIDATION_DIR="$TEMP_DIR/validation_gpu${gpu_id}"
                 mkdir -p "$GPU_VALIDATION_DIR/Accepted"
 
-                # Copy this GPU's PDB files to temp directory
-                while IFS=, read -r design_name rest; do
-                    if [ -n "$design_name" ] && [ "$design_name" != "Design" ]; then
-                        # Find and copy PDB file
-                        if [ -f "$SHARED_OUTPUT_DIR/Accepted/${design_name}.pdb" ]; then
-                            cp "$SHARED_OUTPUT_DIR/Accepted/${design_name}.pdb" "$GPU_VALIDATION_DIR/Accepted/"
-                        fi
-                    fi
-                done < <(tail -n +2 "$GPU_CSV")
+                # Copy this GPU's PDB files to temp directory using Python (safer CSV parsing)
+                python3 -c "
+import csv
+import shutil
+from pathlib import Path
+
+csv_file = '$GPU_CSV'
+merged_dir = Path('$MERGED_DIR')
+val_dir = Path('$GPU_VALIDATION_DIR')
+
+with open(csv_file, 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        design_name = row.get('Design', row.get('design_name', row.get('design', '')))
+        if design_name:
+            pdb_file = merged_dir / 'Accepted' / f'{design_name}.pdb'
+            if pdb_file.exists():
+                shutil.copy(pdb_file, val_dir / 'Accepted')
+"
 
                 # Copy CSV to temp dir
                 cp "$GPU_CSV" "$GPU_VALIDATION_DIR/$(basename $INPUT_CSV)"
 
-                echo "[LAUNCH] GPU $gpu_id: Validating designs $START_LINE-$END_LINE ($GPU_DESIGNS designs)"
+                echo "[LAUNCH] GPU $gpu_id: Validating $GPU_VAL_DESIGNS designs"
 
                 # Launch validation in background on this GPU
                 (
@@ -508,7 +597,7 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
                         --config "$validation_config" \
                         --input "$GPU_VALIDATION_DIR" \
                         --output "$GPU_VALIDATION_DIR" \
-                        2>&1 | sed "s/^/[GPU $gpu_id VALIDATION] /"
+                        2>&1 | sed "s/^/[GPU $gpu_id VAL] /"
                 ) > "$WORKSPACE_DIR/validation_gpu${gpu_id}.log" 2>&1 &
 
                 VALIDATION_PIDS+=($!)
@@ -533,23 +622,23 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
             # Merge validation results
             if [ "$VALIDATION_FAILED" -eq 0 ]; then
                 echo "[MERGE] Merging validation results from all GPUs..."
-                MERGED_CSV="$SHARED_OUTPUT_DIR/multi_state_scores.csv"
+                MERGED_VAL_CSV="$MERGED_DIR/multi_state_scores.csv"
 
                 first_file=true
                 for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
                     GPU_VALIDATION_CSV="$TEMP_DIR/validation_gpu${gpu_id}/multi_state_scores.csv"
                     if [ -f "$GPU_VALIDATION_CSV" ]; then
                         if $first_file; then
-                            cp "$GPU_VALIDATION_CSV" "$MERGED_CSV"
+                            cp "$GPU_VALIDATION_CSV" "$MERGED_VAL_CSV"
                             first_file=false
                         else
-                            tail -n +2 "$GPU_VALIDATION_CSV" >> "$MERGED_CSV"
+                            tail -n +2 "$GPU_VALIDATION_CSV" >> "$MERGED_VAL_CSV"
                         fi
                     fi
                 done
 
-                if [ -f "$MERGED_CSV" ]; then
-                    num_validated=$(tail -n +2 "$MERGED_CSV" 2>/dev/null | wc -l || echo 0)
+                if [ -f "$MERGED_VAL_CSV" ]; then
+                    num_validated=$(tail -n +2 "$MERGED_VAL_CSV" 2>/dev/null | wc -l || echo 0)
                     echo "[SUCCESS] Multi-state validation complete: $num_validated designs validated"
                 fi
             else
@@ -560,29 +649,38 @@ if [ "$ENABLE_MULTI_STATE" = true ]; then
     fi
 fi
 
+# Clean up GPU-specific directories
+echo "[CLEANUP] Removing GPU-specific directories..."
+for gpu_id in $(seq 0 $((NUM_GPUS - 1))); do
+    GPU_OUTPUT_DIR="${BASE_DESIGN_PATH}_gpu${gpu_id}"
+    if [ -d "$GPU_OUTPUT_DIR" ]; then
+        rm -rf "$GPU_OUTPUT_DIR"
+    fi
+done
+
 echo ""
 echo "=== [SUMMARY] ==="
 if [ "$FAILED" -eq 0 ]; then
-    echo "[SUCCESS] All $NUM_GPUS worker instances completed successfully!"
+    echo "[SUCCESS] All $NUM_GPUS GPU instances completed successfully!"
     echo ""
-    echo "[INFO] Shared output directory: $SHARED_OUTPUT_DIR"
+    echo "[INFO] Merged output directory: $MERGED_DIR"
 
-    if [ -d "$SHARED_OUTPUT_DIR/Accepted" ]; then
-        num_accepted=$(find "$SHARED_OUTPUT_DIR/Accepted" -name "*.pdb" 2>/dev/null | wc -l || echo 0)
+    if [ -d "$MERGED_DIR/Accepted" ]; then
+        num_accepted=$(find "$MERGED_DIR/Accepted" -name "*.pdb" -type f 2>/dev/null | wc -l)
         echo "[INFO] Total accepted designs: $num_accepted"
     fi
 
     echo ""
-    echo "[INFO] Work queue mode: All GPUs wrote to shared directory (no merge needed)"
-    echo "[INFO] Post-processing has been completed on the unified output"
+    echo "[INFO] Hybrid work queue mode: Each GPU had separate directory (no race conditions)"
+    echo "[INFO] Results merged and post-processed in parallel"
 
-    if [ -f "$SHARED_OUTPUT_DIR/filtered_designs.csv" ]; then
-        num_filtered=$(tail -n +2 "$SHARED_OUTPUT_DIR/filtered_designs.csv" 2>/dev/null | wc -l || echo 0)
+    if [ -f "$MERGED_DIR/filtered_designs.csv" ]; then
+        num_filtered=$(tail -n +2 "$MERGED_DIR/filtered_designs.csv" 2>/dev/null | wc -l || echo 0)
         echo "[INFO] Filtered designs: $num_filtered"
     fi
 
-    if [ -f "$SHARED_OUTPUT_DIR/multi_state_scores.csv" ]; then
-        num_validated=$(tail -n +2 "$SHARED_OUTPUT_DIR/multi_state_scores.csv" 2>/dev/null | wc -l || echo 0)
+    if [ -f "$MERGED_DIR/multi_state_scores.csv" ]; then
+        num_validated=$(tail -n +2 "$MERGED_DIR/multi_state_scores.csv" 2>/dev/null | wc -l || echo 0)
         echo "[INFO] Multi-state validated designs: $num_validated"
     fi
 
