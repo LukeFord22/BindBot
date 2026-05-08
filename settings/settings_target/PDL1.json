@@ -4,5 +4,5 @@
     "starting_pdb": "/workspace/BindBot/Inputs/PDL1.pdb",
     "chains": "A",
     "target_hotspot_residues": "56",
-    "lengths": [65, 150]
+    "lengths": [75]
 }

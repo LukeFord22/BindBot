@@ -156,24 +156,18 @@ class PostDesignFilter:
 
     def find_accepted_csv(self) -> Optional[Path]:
         """Find the accepted designs CSV file"""
-        # Look for common CSV names
+        # BindCraft outputs final_design_stats.csv or mpnn_design_stats.csv
         candidates = [
-            self.input_dir / "accepted_mpnn_full_stats.csv",
-            self.input_dir / "accepted_designs.csv",
-            self.accepted_dir / "accepted_mpnn_full_stats.csv",
-            self.accepted_dir / "accepted_designs.csv"
+            self.input_dir / "final_design_stats.csv",    # BindCraft final designs (primary)
+            self.input_dir / "mpnn_design_stats.csv"      # BindCraft MPNN stats (fallback)
         ]
 
         for csv_path in candidates:
             if csv_path.exists():
+                print(f"[INFO] Found accepted designs CSV: {csv_path}")
                 return csv_path
 
-        # Search for any CSV in accepted directory
-        if self.accepted_dir.exists():
-            csv_files = list(self.accepted_dir.glob("*.csv"))
-            if csv_files:
-                return csv_files[0]
-
+        print(f"[ERROR] No CSV file found. Expected {self.input_dir}/final_design_stats.csv")
         return None
 
 
