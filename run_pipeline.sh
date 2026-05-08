@@ -124,11 +124,15 @@ detect_gpus
 #############################################
 
 echo "[STEP] Activating BindCraft conda environment..."
+# Temporarily disable nounset to avoid conda activation script issues
+set +u
 source /miniforge3/etc/profile.d/conda.sh
 conda activate BindCraft || {
     echo "[ERROR] Failed to activate BindCraft environment"
     exit 1
 }
+# Re-enable nounset after conda activation
+set -u
 
 
 #############################################

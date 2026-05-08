@@ -474,7 +474,6 @@ print(f"Filtering designs based on {filters_file}")
 script_start_time = time.time()
 trajectory_n = 1
 accepted_designs = 0
-consecutive_failed_trajectories = 0  # Track consecutive trajectories with no accepted MPNN designs
 
 ### start design loop
 while True:
@@ -900,11 +899,9 @@ while True:
                     if accepted_mpnn >= 1:
                         print("Found "+str(accepted_mpnn)+" MPNN designs passing filters")
                         print("")
-                        consecutive_failed_trajectories = 0  # Reset counter on success
                     else:
                         print("No accepted MPNN designs found for this trajectory.")
                         print("")
-                        consecutive_failed_trajectories += 1  # Increment failure counter
 
                 else:
                     print('Duplicate MPNN designs sampled with different trajectory, skipping current trajectory optimisation')
@@ -918,12 +915,6 @@ while True:
                 design_time = time.time() - design_start_time
                 design_time_text = f"{'%d hours, %d minutes, %d seconds' % (int(design_time // 3600), int((design_time % 3600) // 60), int(design_time % 60))}"
                 print("Design and validation of trajectory "+design_name+" took: "+design_time_text)
-
-            # Check if too many consecutive trajectories failed to produce accepted MPNN designs
-            max_consecutive_failures = advanced_settings.get("max_consecutive_failed_trajectories", 3)
-            if consecutive_failed_trajectories >= max_consecutive_failures:
-                print(f"\n[EARLY TERMINATION] {consecutive_failed_trajectories} consecutive trajectories failed to produce accepted MPNN designs.")
-                break
 
             # analyse the rejection rate of trajectories to see if we need to readjust the design weights
             if trajectory_n >= advanced_settings["start_monitoring"] and advanced_settings["enable_rejection_check"]:

@@ -57,7 +57,6 @@
     "zip_plots": true,
     "save_trajectory_pickle": false,
     "max_trajectories": false,
-    "max_consecutive_failed_trajectories": 3,
     "enable_rejection_check": true,
     "acceptance_rate": 0.1,
     "start_monitoring": 1000,

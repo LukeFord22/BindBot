@@ -120,16 +120,22 @@ with open('$GPU_SETTINGS_FILE', 'w') as f:
         GPU_LOG="$WORKSPACE_DIR/bindcraft_gpu${gpu_id}.log"
         echo "[LAUNCH] GPU $gpu_id: Output -> $GPU_OUTPUT_DIR"
 
-        # Launch BindCraft in background
+        # Launch BindCraft in background with its own process group
         (
+            # Create new process group so we can kill the entire tree
+            set -m
             cd "$BINDCRAFT_DIR"
-            CUDA_VISIBLE_DEVICES=$gpu_id python bindcraft.py \
+            # Use unbuffered output and explicit logging
+            exec > >(tee -a "$GPU_LOG") 2>&1
+            echo "[GPU $gpu_id] Starting BindCraft at $(date)"
+            echo "[GPU $gpu_id] Settings: $GPU_SETTINGS_FILE"
+            echo "[GPU $gpu_id] Output: $GPU_OUTPUT_DIR"
+            CUDA_VISIBLE_DEVICES=$gpu_id python -u bindcraft.py \
                 --settings "$GPU_SETTINGS_FILE" \
                 --filters "$FILTERS_FILE" \
                 --advanced "$ADVANCED_FILE" \
-                "${EXTRA_ARGS[@]}" \
-                2>&1 | sed "s/^/[GPU $gpu_id] /"
-        ) > "$GPU_LOG" 2>&1 &
+                "${EXTRA_ARGS[@]}"
+        ) &
 
         PIDS+=($!)
         echo "[LAUNCH] GPU $gpu_id: PID ${PIDS[-1]}"
@@ -188,22 +194,24 @@ monitor_and_stop_workers() {
             echo "stopped" > "$COUNTER_DIR/status.txt"
             TARGET_REACHED=true
 
-            # Send SIGTERM to all running BindCraft processes
+            # Send SIGTERM to all running BindCraft processes and their children
             for pid in "${PIDS[@]}"; do
                 if kill -0 "$pid" 2>/dev/null; then
-                    echo "[STOP] Sending SIGTERM to PID $pid"
-                    kill -TERM "$pid" 2>/dev/null || true
+                    echo "[STOP] Sending SIGTERM to process tree of PID $pid"
+                    # Kill the entire process group (negative PID)
+                    kill -TERM -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null || true
                 fi
             done
 
             # Wait a bit for graceful shutdown
             sleep 20
 
-            # Force kill any remaining processes
+            # Force kill any remaining processes and their children
             for pid in "${PIDS[@]}"; do
                 if kill -0 "$pid" 2>/dev/null; then
-                    echo "[STOP] Force killing PID $pid"
-                    kill -9 "$pid" 2>/dev/null || true
+                    echo "[STOP] Force killing process tree of PID $pid"
+                    # Kill the entire process group
+                    kill -9 -$pid 2>/dev/null || kill -9 $pid 2>/dev/null || true
                 fi
             done
 

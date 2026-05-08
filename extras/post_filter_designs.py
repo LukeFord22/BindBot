@@ -92,27 +92,38 @@ class PostDesignFilter:
         print("[INFO] Starting post-filtering of accepted designs...")
 
         # Load accepted designs CSV
-        accepted_csv = self.find_accepted_csv()
-        if accepted_csv is None:
-            print("[ERROR] Could not find accepted designs CSV")
+        # Find all PDB files in Accepted directory
+        pdb_files = list(self.accepted_dir.glob("*.pdb"))
+        print(f"[INFO] Found {len(pdb_files)} PDB files in Accepted directory")
+
+        if not pdb_files:
+            print("[ERROR] No PDB files found in Accepted directory")
             return None, None, None
 
-        df_accepted = pd.read_csv(accepted_csv)
-        print(f"[INFO] Found {len(df_accepted)} accepted designs to filter")
+        # Load CSV for additional metadata (optional)
+        accepted_csv = self.input_dir / "final_design_stats.csv"
+        df_accepted = None
+        csv_metadata = {}
+        if accepted_csv.exists():
+            df_accepted = pd.read_csv(accepted_csv)
+            # Create lookup dict for CSV metadata by design name
+            for _, row in df_accepted.iterrows():
+                design_name = row.get('Design', row.get('design', ''))
+                if design_name:
+                    csv_metadata[design_name] = row.to_dict()
+            print(f"[INFO] Loaded metadata for {len(csv_metadata)} designs from CSV")
 
-        # Process each design
-        for idx, row in df_accepted.iterrows():
-            design_name = row.get('design', row.get('binder_name', f'design_{idx}'))
-            pdb_path = self.find_pdb_file(design_name)
-
-            if pdb_path is None:
-                print(f"[WARN] Could not find PDB for {design_name}, skipping")
-                continue
-
+        # Process each PDB file
+        for idx, pdb_path in enumerate(pdb_files):
+            design_name = pdb_path.stem  # Get filename without extension
             print(f"[INFO] Filtering {design_name}...")
 
+            # Get metadata from CSV if available (match base name without _modelX suffix)
+            base_name = design_name.rsplit('_model', 1)[0] if '_model' in design_name else design_name
+            row_data = csv_metadata.get(base_name, csv_metadata.get(design_name, {}))
+
             # Run all filters
-            filter_results = self.filter_design(design_name, pdb_path, row)
+            filter_results = self.filter_design(design_name, pdb_path, row_data)
             filter_results['design'] = design_name
             filter_results['original_rank'] = idx + 1
 
@@ -152,46 +163,6 @@ class PostDesignFilter:
         print(f"  Rejected: {len(df_rejected)}")
 
         return df_passed, df_rejected, report
-
-
-    def find_accepted_csv(self) -> Optional[Path]:
-        """Find the accepted designs CSV file"""
-        # BindCraft outputs final_design_stats.csv or mpnn_design_stats.csv
-        candidates = [
-            self.input_dir / "final_design_stats.csv",    # BindCraft final designs (primary)
-            self.input_dir / "mpnn_design_stats.csv"      # BindCraft MPNN stats (fallback)
-        ]
-
-        for csv_path in candidates:
-            if csv_path.exists():
-                print(f"[INFO] Found accepted designs CSV: {csv_path}")
-                return csv_path
-
-        print(f"[ERROR] No CSV file found. Expected {self.input_dir}/final_design_stats.csv")
-        return None
-
-
-    def find_pdb_file(self, design_name: str) -> Optional[Path]:
-        """Find PDB file for a given design"""
-        # Try common naming patterns
-        candidates = [
-            self.accepted_dir / f"{design_name}.pdb",
-            self.accepted_dir / f"{design_name}_relaxed.pdb",
-            self.accepted_dir / f"{design_name}_final.pdb",
-        ]
-
-        for pdb_path in candidates:
-            if pdb_path.exists():
-                return pdb_path
-
-        # Search for partial match
-        if self.accepted_dir.exists():
-            for pdb_file in self.accepted_dir.glob("*.pdb"):
-                if design_name in pdb_file.stem:
-                    return pdb_file
-
-        return None
-
 
     def filter_design(self, design_name: str, pdb_path: Path, original_metrics: pd.Series) -> Dict:
         """Apply all filters to a single design"""
