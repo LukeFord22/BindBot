@@ -206,7 +206,7 @@ class MultiStateValidator:
             return None, None
 
         # Load accepted designs
-        accepted_csv = self.find_accepted_csv()
+        accepted_csv = self.input_dir / "filtered_designs.csv"
         if accepted_csv is None:
             print("[ERROR] Could not find accepted designs CSV")
             return None, None
@@ -250,22 +250,6 @@ class MultiStateValidator:
             print(f"  Mean rank score: {df_results['composite_rank_score'].mean():.1f}")
 
         return df_results, report
-
-    def find_accepted_csv(self) -> Optional[Path]:
-        """Find the accepted designs CSV file"""
-        candidates = [
-            self.input_dir / "filtered_designs.csv",      # Post-filter output (highest priority)
-            self.input_dir / "final_design_stats.csv",    # BindCraft final designs
-            self.input_dir / "mpnn_design_stats.csv"      # BindCraft MPNN stats (fallback)
-        ]
-
-        for csv_path in candidates:
-            if csv_path.exists():
-                print(f"[INFO] Found designs CSV for validation: {csv_path}")
-                return csv_path
-
-        print(f"[ERROR] No CSV file found. Expected filtered_designs.csv or final_design_stats.csv in {self.input_dir}")
-        return None
 
     def find_pdb_file(self, design_name: str) -> Optional[Path]:
         """Find PDB file for a given design"""

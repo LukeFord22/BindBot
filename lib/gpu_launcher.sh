@@ -203,6 +203,10 @@ monitor_and_stop_workers() {
                 fi
             done
 
+            # Also kill any Python processes running bindcraft.py
+            echo "[STOP] Killing all bindcraft.py processes..."
+            pkill -TERM -f "python.*bindcraft.py" 2>/dev/null || true
+
             # Wait a bit for graceful shutdown
             sleep 20
 
@@ -214,6 +218,13 @@ monitor_and_stop_workers() {
                     kill -9 -$pid 2>/dev/null || kill -9 $pid 2>/dev/null || true
                 fi
             done
+
+            # Force kill any remaining Python bindcraft processes
+            echo "[STOP] Force killing any remaining bindcraft.py processes..."
+            pkill -9 -f "python.*bindcraft.py" 2>/dev/null || true
+
+            # Extra wait to ensure processes are truly dead
+            sleep 5
 
             break
         fi

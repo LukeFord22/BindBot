@@ -30,11 +30,11 @@ VERBOSE=true
 #############################################
 
 # Post-filtering: Apply additional biochemical/structural filters to accepted designs
-ENABLE_POST_FILTERING=true
+ENABLE_POST_FILTERING=false
 POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
 
 # Multi-state validation: Test binders against multiple target conformations
-ENABLE_MULTI_STATE=true
+ENABLE_MULTI_STATE=false
 MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
 
 #############################################
