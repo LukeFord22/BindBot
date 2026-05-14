@@ -3,6 +3,6 @@
     "binder_name": "Covid_Spike_Binder",
     "starting_pdb": "/workspace/BindBot/Inputs/Covid_Spike.pdb",
     "chains": "E",
-    "target_hotspot_residues": "",
+    "target_hotspot_residues": "486",
     "lengths": [65]
 }
