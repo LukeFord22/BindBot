@@ -3,6 +3,6 @@
     "binder_name": "N_Protein_Binder",
     "starting_pdb": "/workspace/BindBot/Inputs/Covid_N_Protein.pdb",
     "chains": "A,B",
-    "target_hotspot_residues": "A320,A322,A331,A333,A319",
-    "lengths": [75]
+    "target_hotspot_residues": "",
+    "lengths": [65]
 }

@@ -12,7 +12,7 @@ set -euo pipefail
 #############################################
 
 # Required: Path to your settings file (target configuration)
-SETTINGS_FILE="settings/settings_target/PDL1.json"
+SETTINGS_FILE="settings/settings_target/SEB.json"
 
 # Optional: Path to filters and advanced settings
 FILTERS_FILE="settings/settings_filters/default_filters.json"

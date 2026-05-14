@@ -1,0 +1,8 @@
+{
+    "design_path": "/workspace/outputs/SEB",
+    "binder_name": "SEB_Binder",
+    "starting_pdb": "/workspace/BindBot/Inputs/SEB.pdb",
+    "chains": "A",
+    "target_hotspot_residues": "89",
+    "lengths": [65]
+}

@@ -39,3 +39,8 @@ https://github.com/jensengroup/propka
 animation generation needs to be zoomed out
 
 result dashboard
+
+$3.54/hr
+A40 8x
+
+10 min start
