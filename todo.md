@@ -45,12 +45,15 @@ result dashboard
 
 Target: STAPHYLOCOCCAL ENTEROTOXIN B
 3SEB chain A
+Lengths[65]
 Hotspots: [Y89,Y90]
-Total trajectories:
-Falied designs:
 
-Binders passed by bindcraft:30
-Binders passed by post filter:
+Trajectories: 108
+trajectories/binder: 2.7
+Binders passed during generation:30
+Binders passed by post filter:15 (mostly rejected for self binding risk)
+All binders ranked 0-15 by a composite specificity score selecting for target and against off-target 
+By recursively updating our filtering and generation, confidence in the pipline can be established to go straight from design to recombinant protein
 
 $4.42/hr
 $0.442/hr/gpu
@@ -60,5 +63,3 @@ A40 48GB 10x
 
 Total combined runtime with container launch:(1 hour, 52 minutes, and 34 seconds)
 cost break down: $8.27 ($0.276/binder)
-
-Target 

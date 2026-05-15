@@ -53,6 +53,7 @@ class MultiStateValidator:
         """Initialize validator with config and input directory"""
         self.config = self.load_config(config_path)
         self.input_dir = Path(input_dir)
+        self.output_dir = self.input_dir  # Output directory is the same as input directory
         self.accepted_dir = self.input_dir / "Accepted"
         self.validation_dir = self.input_dir / "MultiStateValidation"
         self.validation_dir.mkdir(parents=True, exist_ok=True)
@@ -514,11 +515,21 @@ class MultiStateValidator:
 
             # Binder pLDDT (last binder_len residues)
             # Copy to numpy array immediately to avoid JAX array deletion
-            # ColabDesign returns pLDDT in 0-1 range, multiply by 100 for 0-100 scale
-            plddt_array = np.array(af2_outputs['plddt']).copy() * 100.0
-            print(f"    [DEBUG] pLDDT array shape: {plddt_array.shape}, mean: {np.mean(plddt_array):.2f}, min: {np.min(plddt_array):.2f}, max: {np.max(plddt_array):.2f}", flush=True)
+            # NOTE: ColabDesign's fixbb protocol returns pLDDT in 0-100 range (NOT 0-1)
+            plddt_array_raw = np.array(af2_outputs['plddt']).copy()
+            print(f"    [DEBUG] Raw pLDDT: shape={plddt_array_raw.shape}, mean={np.mean(plddt_array_raw):.4f}, min={np.min(plddt_array_raw):.4f}, max={np.max(plddt_array_raw):.4f}", flush=True)
+
+            # Check if values are in 0-1 range (need scaling) or 0-100 range (already scaled)
+            if np.max(plddt_array_raw) <= 1.0:
+                plddt_array = plddt_array_raw * 100.0
+                print(f"    [DEBUG] Scaled pLDDT from 0-1 to 0-100 range", flush=True)
+            else:
+                plddt_array = plddt_array_raw
+                print(f"    [DEBUG] pLDDT already in 0-100 range", flush=True)
+
             binder_plddt = np.mean(plddt_array[target_total_len:])
             metrics['binder_plddt'] = float(binder_plddt)
+            print(f"    [DEBUG] Final pLDDT - complex mean: {np.mean(plddt_array):.2f}, binder mean: {binder_plddt:.2f}", flush=True)
 
             # Complex pLDDT
             complex_plddt = np.mean(plddt_array)
@@ -547,6 +558,8 @@ class MultiStateValidator:
                 # i_cmap gives contact probabilities at the interface
                 # Shape is typically (binder_len, target_len) for interface contacts
                 i_cmap = np.array(af2_outputs['i_cmap']).copy()
+
+                print(f"    [DEBUG] i_cmap shape: {i_cmap.shape}, dtype: {i_cmap.dtype}, min: {np.min(i_cmap):.4f}, max: {np.max(i_cmap):.4f}, mean: {np.mean(i_cmap):.4f}", flush=True)
 
                 # Count high-confidence interface contacts (prob > 0.5)
                 interface_contacts = np.sum(i_cmap > 0.5)

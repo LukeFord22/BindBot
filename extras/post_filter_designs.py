@@ -127,10 +127,8 @@ class PostDesignFilter:
             filter_results['design'] = design_name
             filter_results['original_rank'] = idx + 1
 
-            # Copy original metrics
-            for col in row.index:
-                if col not in filter_results:
-                    filter_results[col] = row[col]
+            # Do NOT copy original metrics - only include post-filter data
+            # Users can join datasets if they need original metrics
 
             self.results.append(filter_results)
 

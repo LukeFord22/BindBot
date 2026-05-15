@@ -304,8 +304,18 @@ launch_validation_workers() {
         echo "[LAUNCH] GPU $gpu_id: Validating $GPU_VAL_DESIGNS designs"
 
         # Launch validation in background on this GPU
-        # Use script command to force unbuffered output to log file
-        script -f -c "CUDA_VISIBLE_DEVICES=$gpu_id PYTHONUNBUFFERED=1 stdbuf -oL -eL python -u '$BINDCRAFT_DIR/extras/multi_state_validate.py' --config '$validation_config' --input '$GPU_VALIDATION_DIR' --output '$GPU_VALIDATION_DIR' 2>&1 | stdbuf -oL -eL sed -u 's/^/[GPU $gpu_id VAL] /'" "$WORKSPACE_DIR/validation_gpu${gpu_id}.log" > /dev/null 2>&1 &
+        # Direct approach without complex piping to avoid early exit
+        {
+            CUDA_VISIBLE_DEVICES=$gpu_id \
+            PYTHONUNBUFFERED=1 \
+            python -u "$BINDCRAFT_DIR/extras/multi_state_validate.py" \
+                --config "$validation_config" \
+                --input "$GPU_VALIDATION_DIR" \
+                --output "$GPU_VALIDATION_DIR" \
+                2>&1 | while IFS= read -r line; do
+                    echo "[GPU $gpu_id VAL] $line"
+                done
+        } >> "$WORKSPACE_DIR/validation_gpu${gpu_id}.log" 2>&1 &
 
         VALIDATION_PIDS+=($!)
         VALIDATION_GPU_IDS+=($gpu_id)  # Store the actual GPU ID
