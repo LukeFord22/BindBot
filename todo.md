@@ -40,7 +40,22 @@ animation generation needs to be zoomed out
 
 result dashboard
 
-$3.54/hr
-A40 8x
+Target: STAPHYLOCOCCAL ENTEROTOXIN B
+3SEB chain A
+Hotspots: [Y89,Y90]
+Total trajectories:
+Falied designs:
 
-10 min start
+Binders passed by bindcraft:30
+Binders passed by post filter:
+
+$4.42/hr
+$0.442/hr/gpu
+A40 48GB 10x 
+502GB RAM
+96 (Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz)
+
+Total combined runtime with container launch:(1 hour, 52 minutes, and 34 seconds)
+cost break down: $8.27 ($0.276/binder)
+
+Target 

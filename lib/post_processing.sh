@@ -13,7 +13,12 @@ run_post_filter() {
 
     echo "[POST-FILTER] Running post-filtering on accepted designs..."
 
-    local filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
+    # Use POST_FILTER_CONFIG as-is if absolute, otherwise prepend BINDCRAFT_DIR
+    local filter_config="$POST_FILTER_CONFIG"
+    if [[ "$filter_config" != /* ]]; then
+        filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
+    fi
+
     if [ ! -f "$filter_config" ]; then
         echo "[WARN] Post-filter config not found: $filter_config"
         return 1
@@ -54,7 +59,11 @@ run_multi_state_validation_sequential() {
         echo "[INFO] Input source: accepted_mpnn_full_stats.csv (BindCraft output)"
     fi
 
-    local validation_config="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
+    # Use MULTI_STATE_CONFIG as-is if absolute, otherwise prepend BINDCRAFT_DIR
+    local validation_config="$MULTI_STATE_CONFIG"
+    if [[ "$validation_config" != /* ]]; then
+        validation_config="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
+    fi
 
     if [ ! -f "$validation_config" ]; then
         echo "[WARN] Multi-state validation config not found: $validation_config"
@@ -136,7 +145,12 @@ run_post_filter_multi_gpu() {
 
     echo "[POST-FILTER] Running post-filtering on merged designs..."
 
-    local filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
+    # Use POST_FILTER_CONFIG as-is if absolute, otherwise prepend BINDCRAFT_DIR
+    local filter_config="$POST_FILTER_CONFIG"
+    if [[ "$filter_config" != /* ]]; then
+        filter_config="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
+    fi
+
     if [ ! -f "$filter_config" ]; then
         echo "[WARN] Post-filter config not found: $filter_config"
         return 1
@@ -167,6 +181,7 @@ run_post_filter_multi_gpu() {
 split_designs_for_validation() {
     local input_csv="$1"
     local num_gpus="$2"
+    local merged_dir="$3"
 
     TOTAL_DESIGNS_TO_VALIDATE=$(tail -n +2 "$input_csv" 2>/dev/null | wc -l || echo 0)
     VAL_DESIGNS_PER_GPU=$((TOTAL_DESIGNS_TO_VALIDATE / num_gpus))
@@ -198,25 +213,55 @@ split_designs_for_validation() {
         # Create temporary output directory for this GPU
         GPU_VALIDATION_DIR="$TEMP_DIR/validation_gpu${gpu_id}"
         mkdir -p "$GPU_VALIDATION_DIR/Accepted"
+        mkdir -p "$GPU_VALIDATION_DIR/MultiStateValidation/generated_positive_states"
+
+        # Copy any pre-generated positive states from merged directory to GPU worker directory
+        MERGED_GEN_STATES="$merged_dir/MultiStateValidation/generated_positive_states"
+        if [ -d "$MERGED_GEN_STATES" ]; then
+            cp "$MERGED_GEN_STATES/"*.pdb "$GPU_VALIDATION_DIR/MultiStateValidation/generated_positive_states/" 2>/dev/null && \
+                echo "[GPU $gpu_id] Copied generated positive states" || true
+        fi
 
         # Copy this GPU's PDB files to temp directory using Python (safer CSV parsing)
         python3 -c "
 import csv
 import shutil
 from pathlib import Path
+import sys
 
 csv_file = '$GPU_CSV'
-merged_dir = Path('$MERGED_DIR')
+merged_dir = Path('$merged_dir')
 val_dir = Path('$GPU_VALIDATION_DIR')
+
+copied = 0
+missing = []
 
 with open(csv_file, 'r') as f:
     reader = csv.DictReader(f)
     for row in reader:
-        design_name = row.get('Design', row.get('design_name', row.get('design', '')))
-        if design_name:
-            pdb_file = merged_dir / 'Accepted' / f'{design_name}.pdb'
-            if pdb_file.exists():
-                shutil.copy(pdb_file, val_dir / 'Accepted')
+        # Try different column name variations
+        design_name = row.get('design') or row.get('Design') or row.get('design_name') or row.get('Design_Name')
+        if not design_name:
+            continue
+
+        # Strategy 1: Exact match
+        pdb_file = (merged_dir / 'Accepted' / f'{design_name}.pdb')
+        if pdb_file.exists():
+            shutil.copy(pdb_file, val_dir / 'Accepted')
+            copied += 1
+            continue
+
+        # File not found
+        missing.append(design_name)
+
+if missing:
+    print(f'[GPU $gpu_id WARN] {len(missing)} PDB files not found in {merged_dir}/Accepted:', file=sys.stderr)
+    for name in missing[:5]:  # Show first 5
+        print(f'  - {name}', file=sys.stderr)
+    if len(missing) > 5:
+        print(f'  ... and {len(missing) - 5} more', file=sys.stderr)
+
+print(f'[GPU $gpu_id INFO] Copied {copied}/{copied + len(missing)} PDB files', file=sys.stderr)
 "
 
         # Copy CSV to temp dir
@@ -300,6 +345,8 @@ wait_and_merge_validation() {
     if [ "$VALIDATION_FAILED" -eq 0 ]; then
         echo "[MERGE] Merging validation results from all GPUs..."
         MERGED_VAL_CSV="$merged_dir/multi_state_scores.csv"
+        MERGED_VAL_DIR="$merged_dir/MultiStateValidation"
+        mkdir -p "$MERGED_VAL_DIR"
 
         first_file=true
         # Iterate over actual GPU IDs that had validation work
@@ -313,11 +360,19 @@ wait_and_merge_validation() {
                     tail -n +2 "$GPU_VALIDATION_CSV" >> "$MERGED_VAL_CSV"
                 fi
             fi
+
+            # Merge complex PDB files from MultiStateValidation directory
+            GPU_VAL_DIR="$TEMP_DIR/validation_gpu${gpu_id}/MultiStateValidation"
+            if [ -d "$GPU_VAL_DIR" ]; then
+                cp -r "$GPU_VAL_DIR/"*.pdb "$MERGED_VAL_DIR/" 2>/dev/null || true
+            fi
         done
 
         if [ -f "$MERGED_VAL_CSV" ]; then
             num_validated=$(tail -n +2 "$MERGED_VAL_CSV" 2>/dev/null | wc -l || echo 0)
+            num_complexes=$(ls -1 "$MERGED_VAL_DIR"/*.pdb 2>/dev/null | wc -l || echo 0)
             echo "[SUCCESS] Multi-state validation complete: $num_validated designs validated"
+            echo "[SUCCESS] Merged $num_complexes complex PDB files to $MERGED_VAL_DIR"
         fi
 
         return 0
@@ -342,7 +397,12 @@ run_multi_state_validation_parallel() {
 
     echo "[MULTI-STATE] Splitting validation workload across $num_gpus GPU(s)..."
 
-    local validation_config="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
+    # Use MULTI_STATE_CONFIG as-is if absolute, otherwise prepend BINDCRAFT_DIR
+    local validation_config="$MULTI_STATE_CONFIG"
+    if [[ "$validation_config" != /* ]]; then
+        validation_config="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
+    fi
+
     if [ ! -f "$validation_config" ]; then
         echo "[WARN] Multi-state validation config not found: $validation_config"
         return 1
@@ -361,7 +421,7 @@ run_multi_state_validation_parallel() {
     fi
 
     # Split CSV for parallel processing
-    split_designs_for_validation "$INPUT_CSV" "$num_gpus"
+    split_designs_for_validation "$INPUT_CSV" "$num_gpus" "$merged_dir"
 
     # Launch validation workers
     launch_validation_workers "$num_gpus" "$validation_config"

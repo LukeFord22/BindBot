@@ -26,6 +26,15 @@ from Bio import PDB
 import warnings
 warnings.filterwarnings('ignore')
 
+# Configure JAX for multi-GPU support BEFORE importing colabdesign
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+os.environ.setdefault('XLA_PYTHON_CLIENT_ALLOCATOR', 'platform')
+os.environ.setdefault('JAX_PLATFORMS', 'cuda')  # Force CUDA backend
+
+# Import JAX first to configure it before colabdesign
+import jax
+jax.config.update('jax_platform_name', 'gpu')
+
 from colabdesign import mk_afdesign_model, clear_mem
 
 # Import utility functions from multi_state_utils
@@ -170,8 +179,11 @@ class MultiStateValidator:
                         print(f"  [SUCCESS] Generated OpenMM relaxed state")
 
                 else:
-                    print(f"  [WARN] Positive state generation failed:")
-                    print(f"    {result.stderr}")
+                    print(f"  [WARN] Positive state generation failed (exit code {result.returncode}):")
+                    if result.stderr:
+                        print(f"    stderr: {result.stderr}")
+                    if result.stdout:
+                        print(f"    stdout: {result.stdout}")
 
             except subprocess.TimeoutExpired:
                 print(f"  [WARN] Positive state generation timed out")
@@ -186,6 +198,17 @@ class MultiStateValidator:
         """Initialize AlphaFold2 model for predictions"""
         try:
             print("[INFO] Initializing AlphaFold2 model...")
+
+            # Clear any existing JAX backends to avoid multi-GPU conflicts (if available)
+            try:
+                jax.clear_backends()
+            except AttributeError:
+                # Older JAX version doesn't have clear_backends
+                pass
+
+            # Force reinitialization on the correct GPU
+            _ = jax.devices()  # Trigger device discovery
+
             self.af_model = mk_afdesign_model(
                 protocol="binder",
                 use_multimer=True,
@@ -205,22 +228,25 @@ class MultiStateValidator:
             print("[ERROR] No target states loaded. Check configuration.")
             return None, None
 
-        # Load accepted designs
+        # Load accepted designs from filtered_designs.csv (created by post-filter step)
         accepted_csv = self.input_dir / "filtered_designs.csv"
-        if accepted_csv is None:
-            print("[ERROR] Could not find accepted designs CSV")
+        if not accepted_csv.exists():
+            print("[ERROR] filtered_designs.csv not found. Run post-filtering first.")
             return None, None
 
         df_accepted = pd.read_csv(accepted_csv)
-        print(f"[INFO] Found {len(df_accepted)} accepted designs to validate")
+        print(f"[INFO] Found {len(df_accepted)} post-filtered designs to validate")
 
         # Process each design
         for idx, row in df_accepted.iterrows():
-            design_name = row.get('design', row.get('binder_name', f'design_{idx}'))
-            binder_pdb = self.find_pdb_file(design_name)
+            # Get design name from 'design' column (created by post-filter)
+            design_name = row.get('design', f'design_{idx}')
 
-            if binder_pdb is None:
-                print(f"[WARN] Could not find PDB for {design_name}, skipping")
+            # Construct PDB path from design name (name already includes full suffix from post-filter)
+            binder_pdb = self.accepted_dir / f"{design_name}.pdb"
+
+            if not binder_pdb.exists():
+                print(f"[WARN] No PDB file found for {design_name} in {self.accepted_dir}, skipping")
                 continue
 
             print(f"\n[INFO] Validating {design_name} against {len(self.target_states)} states...")
@@ -251,26 +277,6 @@ class MultiStateValidator:
 
         return df_results, report
 
-    def find_pdb_file(self, design_name: str) -> Optional[Path]:
-        """Find PDB file for a given design"""
-        candidates = [
-            self.accepted_dir / f"{design_name}.pdb",
-            self.accepted_dir / f"{design_name}_relaxed.pdb",
-            self.accepted_dir / f"{design_name}_final.pdb",
-        ]
-
-        for pdb_path in candidates:
-            if pdb_path.exists():
-                return pdb_path
-
-        # Search for partial match
-        if self.accepted_dir.exists():
-            for pdb_file in self.accepted_dir.glob("*.pdb"):
-                if design_name in pdb_file.stem:
-                    return pdb_file
-
-        return None
-
     def validate_design(self, design_name: str, binder_pdb: Path, original_metrics: pd.Series) -> List[Dict]:
         """Validate a single design against all target states"""
         state_results = []
@@ -287,13 +293,15 @@ class MultiStateValidator:
             }
 
             # Create complex structure (binder + target state)
-            complex_pdb = self.create_complex(binder_pdb, target_state)
+            complex_result = self.create_complex(binder_pdb, target_state)
 
-            if complex_pdb is None:
+            if complex_result is None:
                 print(f"    [ERROR] Failed to create complex for {target_state['name']}")
                 result['validation_status'] = 'FAILED'
                 state_results.append(result)
                 continue
+
+            complex_pdb, binder_chain_id = complex_result
 
             # Run AF2 prediction if available
             if self.af_model is not None and self.config.get('run_af2_prediction', True):
@@ -303,8 +311,8 @@ class MultiStateValidator:
                 # Use structural analysis only
                 result.update(multi_state_utils.analyze_structure(self.pdb_parser, complex_pdb))
 
-            # Calculate interface metrics
-            interface_metrics = multi_state_utils.calculate_interface_metrics(complex_pdb)
+            # Calculate interface metrics with correct binder chain ID
+            interface_metrics = multi_state_utils.calculate_interface_metrics(complex_pdb, binder_chain=binder_chain_id)
             result.update(interface_metrics)
 
             # Calculate RMSD if reference structure available
@@ -326,9 +334,9 @@ class MultiStateValidator:
         aligns target state to reference frame before combining with binder.
         """
         try:
-            # Load binder
+            # Load binder (BindCraft outputs are complexes with target chains first, binder chain last)
             binder_structure = self.pdb_parser.get_structure('binder', str(binder_pdb))
-            binder_chain = list(binder_structure[0].get_chains())[0]
+            binder_chain = list(binder_structure[0].get_chains())[-1]  # Binder is always the last chain
 
             # Load target
             target_structure = self.pdb_parser.get_structure('target', str(target_state['pdb_path']))
@@ -411,7 +419,7 @@ class MultiStateValidator:
 
             print(f"    [INFO] Created complex: {len(target_chains)} target chain(s) + binder (chain {binder_chain_id})")
 
-            return complex_pdb_path
+            return complex_pdb_path, binder_chain_id
 
         except Exception as e:
             print(f"    [ERROR] Failed to create complex: {e}")
@@ -452,6 +460,22 @@ class MultiStateValidator:
             chain_ids = [c.id for c in chains]
             chain_string = ",".join(chain_ids)
 
+            # CRITICAL FIX: Reinitialize model for each prediction to avoid JAX array deletion
+            # This prevents stale internal state from causing "Array has been deleted" errors
+            clear_mem()
+
+            # Delete and reinitialize the model
+            self.af_model = None
+            clear_mem()
+
+            # Reinitialize with same settings
+            self.af_model = mk_afdesign_model(
+                protocol="binder",
+                use_multimer=True,
+                num_recycles=3,
+                data_dir="/data/params"
+            )
+
             # Prepare AF2 model
             self.af_model.prep_inputs(
                 pdb_filename=str(complex_pdb),
@@ -460,43 +484,68 @@ class MultiStateValidator:
             )
 
             # Run prediction
-            self.af_model.predict(verbose=False)
+            try:
+                self.af_model.predict(verbose=False)
+            except Exception as pred_error:
+                error_msg = str(pred_error)
+                print(f"    [ERROR] AF2 prediction failed: {error_msg}")
+                # Clear memory after failure
+                clear_mem()
+                return {'af2_error': error_msg, 'validation_status': 'PARTIAL'}
 
-            # Extract metrics
+            # Extract metrics - IMPORTANT: Copy arrays to numpy immediately to avoid deletion issues
             af2_outputs = self.af_model.aux
 
+            # Check if we have valid outputs
+            if not af2_outputs or 'plddt' not in af2_outputs:
+                print(f"    [ERROR] AF2 outputs missing plddt data")
+                clear_mem()
+                return {'af2_error': 'Invalid AF2 outputs', 'validation_status': 'PARTIAL'}
+
             # Binder pLDDT (last binder_len residues)
-            binder_plddt = np.mean(af2_outputs['plddt'][target_total_len:])
+            # Copy to numpy array immediately to avoid JAX array deletion
+            plddt_array = np.array(af2_outputs['plddt']).copy()
+            print(f"    [DEBUG] pLDDT array shape: {plddt_array.shape}, mean: {np.mean(plddt_array):.2f}, min: {np.min(plddt_array):.2f}, max: {np.max(plddt_array):.2f}")
+            binder_plddt = np.mean(plddt_array[target_total_len:])
             metrics['binder_plddt'] = float(binder_plddt)
 
             # Complex pLDDT
-            complex_plddt = np.mean(af2_outputs['plddt'])
+            complex_plddt = np.mean(plddt_array)
             metrics['complex_plddt'] = float(complex_plddt)
 
             # Interface pAE (binder to all target chains)
-            pae_matrix = af2_outputs['pae']
-            target_idx = list(range(target_total_len))
-            binder_idx = list(range(target_total_len, target_total_len + len(binder_seq)))
+            if 'pae' in af2_outputs:
+                # Copy to numpy array immediately
+                pae_matrix = np.array(af2_outputs['pae']).copy()
+                target_idx = list(range(target_total_len))
+                binder_idx = list(range(target_total_len, target_total_len + len(binder_seq)))
 
-            # Average pAE from binder to target
-            interface_pae = np.mean([pae_matrix[b, t] for b in binder_idx for t in target_idx])
-            metrics['interface_pae'] = float(interface_pae)
+                # Average pAE from binder to target
+                interface_pae = np.mean([pae_matrix[b, t] for b in binder_idx for t in target_idx])
+                metrics['interface_pae'] = float(interface_pae)
+            else:
+                metrics['interface_pae'] = np.nan
 
-            # pTM score
-            metrics['ptm'] = float(af2_outputs.get('ptm', 0))
-
-            # i pTM score (interface pTM)
-            metrics['iptm'] = float(af2_outputs.get('iptm', 0))
+            # pTM and ipTM scores - extract as python floats immediately
+            metrics['ptm'] = float(af2_outputs.get('ptm', np.nan))
+            metrics['iptm'] = float(af2_outputs.get('iptm', np.nan))
 
             num_target_chains = len(target_chains)
-            print(f"    pLDDT: {binder_plddt:.1f}, iPAE: {interface_pae:.2f}, ipTM: {metrics['iptm']:.3f} ({num_target_chains} target chains)")
+            iptm_str = f"{metrics['iptm']:.3f}" if not np.isnan(metrics['iptm']) else "N/A"
+            ipae_str = f"{metrics['interface_pae']:.2f}" if not np.isnan(metrics['interface_pae']) else "N/A"
+            print(f"    pLDDT: {binder_plddt:.1f}, iPAE: {ipae_str}, ipTM: {iptm_str} ({num_target_chains} target chains)")
 
-            # Clear memory
+            # Clear memory after extracting all needed data
             clear_mem()
 
         except Exception as e:
             print(f"    [ERROR] AF2 prediction failed: {e}")
             metrics['af2_error'] = str(e)
+            # Always clear memory on error
+            try:
+                clear_mem()
+            except:
+                pass
 
         return metrics
 

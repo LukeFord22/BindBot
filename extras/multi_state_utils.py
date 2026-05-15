@@ -53,18 +53,22 @@ def analyze_structure(pdb_parser: PDB.PDBParser, complex_pdb: Path) -> Dict:
     return metrics
 
 
-def calculate_interface_metrics(complex_pdb: Path) -> Dict:
+def calculate_interface_metrics(complex_pdb: Path, binder_chain: str = 'B') -> Dict:
     """
     Calculate interface contacts and clashes using production utilities.
 
     Returns interface residue positions for consistency checking across states.
+
+    Args:
+        complex_pdb: Path to complex PDB file
+        binder_chain: Chain ID of the binder (default 'B')
     """
     metrics = {}
 
     try:
         # Use production-ready hotspot_residues for interface contact counting
         # This function returns dict of {residue_position: aa_code} for interface residues
-        interface_residues = hotspot_residues(str(complex_pdb), binder_chain='B', atom_distance_cutoff=4.0)
+        interface_residues = hotspot_residues(str(complex_pdb), binder_chain=binder_chain, atom_distance_cutoff=4.0)
         metrics['interface_contacts'] = len(interface_residues)
 
         # Store interface residue positions for consistency checking

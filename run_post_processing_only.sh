@@ -23,17 +23,36 @@ POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
 ENABLE_MULTI_STATE=true
 MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
 
-# GPU settings (only used for multi-state validation if parallel mode enabled)
-PARALLEL_MODE=false  # Set to true to use multiple GPUs for validation
-NUM_GPUS=1           # Number of GPUs to use (only if PARALLEL_MODE=true)
-
 #############################################
 ### END CONFIG
 #############################################
 
-BINDCRAFT_DIR="/workspace/BindBot"
+# Detect BindCraft directory (script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BINDCRAFT_DIR="${BINDCRAFT_DIR:-$SCRIPT_DIR}"  # Use env var if set, otherwise script location
 LOG_FILE="$OUTPUT_DIR/post_processing.log"
+
+
+#############################################
+### GPU DETECTION FUNCTION
+#############################################
+
+detect_gpus() {
+    if ! command -v nvidia-smi &> /dev/null; then
+        echo "[WARN] nvidia-smi not found. Multi-GPU mode disabled."
+        return 1
+    fi
+
+    local gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)
+
+    if [ "$gpu_count" -eq 0 ]; then
+        echo "[WARN] No GPUs detected. Multi-GPU mode disabled."
+        return 0
+    fi
+
+    echo "$gpu_count"
+    return 0
+}
 
 
 #############################################
@@ -49,22 +68,21 @@ Standalone post-processing script for BindCraft results.
 OPTIONS:
     -i, --input DIR           Input directory (BindCraft output) [required]
     -p, --post-filter         Enable post-filtering
-    -m, --multi-state         Enable multi-state validation
+    -m, --multi-state         Enable multi-state validation (uses all GPUs if available)
     --post-filter-config PATH Config file for post-filtering
     --multi-state-config PATH Config file for multi-state validation
-    --parallel                Enable parallel multi-state validation (multi-GPU)
-    --num-gpus N              Number of GPUs to use for parallel validation
+    --sequential              Force sequential mode (single GPU) for multi-state validation
     -h, --help                Show this help message
 
 EXAMPLES:
-    # Run both post-filtering and multi-state validation
+    # Run both post-filtering and multi-state validation (parallel by default)
     ./run_post_processing_only.sh -i /workspace/outputs/PDL1_designs -p -m
 
     # Run only post-filtering
     ./run_post_processing_only.sh -i /workspace/outputs/PDL1_designs -p
 
-    # Run only multi-state validation with 4 GPUs in parallel
-    ./run_post_processing_only.sh -i /workspace/outputs/PDL1_designs -m --parallel --num-gpus 4
+    # Run multi-state validation in sequential mode (single GPU)
+    ./run_post_processing_only.sh -i /workspace/outputs/PDL1_designs -m --sequential
 
 NOTES:
     - Input directory must contain BindCraft output (final_design_stats.csv or Accepted/ folder)
@@ -98,13 +116,9 @@ while [[ $# -gt 0 ]]; do
             MULTI_STATE_CONFIG="$2"
             shift 2
             ;;
-        --parallel)
-            PARALLEL_MODE=true
+        --sequential)
+            FORCE_SEQUENTIAL=true
             shift
-            ;;
-        --num-gpus)
-            NUM_GPUS="$2"
-            shift 2
             ;;
         -h|--help)
             show_help
@@ -149,9 +163,26 @@ echo "=== [POST-PROCESSING STANDALONE] $(date) ==="
 echo "[INFO] Input directory: $OUTPUT_DIR"
 echo "[INFO] Post-filtering: $ENABLE_POST_FILTERING"
 echo "[INFO] Multi-state validation: $ENABLE_MULTI_STATE"
-echo "[INFO] Parallel mode: $PARALLEL_MODE"
-if [ "$PARALLEL_MODE" = true ]; then
-    echo "[INFO] Number of GPUs: $NUM_GPUS"
+
+# Auto-detect GPUs if multi-state validation is enabled
+if [ "$ENABLE_MULTI_STATE" = true ]; then
+    NUM_GPUS=$(detect_gpus)
+
+    if [ "$FORCE_SEQUENTIAL" = true ]; then
+        echo "[INFO] Sequential mode forced by user"
+        PARALLEL_MODE=false
+        NUM_GPUS=1
+    elif [ -z "$NUM_GPUS" ] || [ "$NUM_GPUS" -eq 0 ]; then
+        echo "[INFO] No GPUs detected, using sequential mode"
+        PARALLEL_MODE=false
+        NUM_GPUS=1
+    elif [ "$NUM_GPUS" -eq 1 ]; then
+        echo "[INFO] 1 GPU detected, using sequential mode"
+        PARALLEL_MODE=false
+    else
+        echo "[INFO] $NUM_GPUS GPUs detected, using parallel mode"
+        PARALLEL_MODE=true
+    fi
 fi
 echo ""
 
@@ -160,6 +191,18 @@ echo ""
 ### PATH NORMALIZATION
 #############################################
 
+# Normalize BINDCRAFT_DIR to absolute path
+if [ -d "$BINDCRAFT_DIR" ]; then
+    BINDCRAFT_DIR="$(cd "$BINDCRAFT_DIR" && pwd)"
+elif [ -d "$SCRIPT_DIR" ]; then
+    BINDCRAFT_DIR="$SCRIPT_DIR"
+else
+    echo "[ERROR] Cannot determine BindCraft directory"
+    exit 1
+fi
+
+echo "[INFO] BindCraft directory: $BINDCRAFT_DIR"
+
 # Make config paths absolute if they're relative
 if [[ "$POST_FILTER_CONFIG" != /* ]]; then
     POST_FILTER_CONFIG="$BINDCRAFT_DIR/$POST_FILTER_CONFIG"
@@ -167,6 +210,9 @@ fi
 if [[ "$MULTI_STATE_CONFIG" != /* ]]; then
     MULTI_STATE_CONFIG="$BINDCRAFT_DIR/$MULTI_STATE_CONFIG"
 fi
+
+echo "[INFO] Post-filter config: $POST_FILTER_CONFIG"
+echo "[INFO] Multi-state config: $MULTI_STATE_CONFIG"
 
 # Verify config files exist (only if feature is enabled)
 if [ "$ENABLE_POST_FILTERING" = true ] && [ ! -f "$POST_FILTER_CONFIG" ]; then
