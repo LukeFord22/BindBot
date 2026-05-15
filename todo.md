@@ -40,6 +40,9 @@ animation generation needs to be zoomed out
 
 result dashboard
 
+[DEBUG] AF2 output keys: ['aatype', 'atom_mask', 'atom_positions', 'cmap', 'grad', 'i_cmap', 'i_ptm', 'loss', 'losses', 'num_recycles', 'pae', 'plddt', 'prev', 'ptm', 'residue_index', 'seq', 'seq_pseudo', 'all', 'log']
+
+
 Target: STAPHYLOCOCCAL ENTEROTOXIN B
 3SEB chain A
 Hotspots: [Y89,Y90]

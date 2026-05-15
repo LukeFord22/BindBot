@@ -140,7 +140,9 @@ class MultiStateValidator:
         if generator_script.exists():
             try:
                 print(f"  Running positive state generator...")
-                result = subprocess.run(
+
+                # Run with real-time output streaming
+                process = subprocess.Popen(
                     [
                         sys.executable,
                         str(generator_script),
@@ -148,12 +150,25 @@ class MultiStateValidator:
                         "--chain", chain_id,
                         "--output", str(output_dir)
                     ],
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    timeout=600  # 10 minute timeout
+                    bufsize=1  # Line buffered
                 )
 
-                if result.returncode == 0:
+                # Stream output in real-time
+                for line in process.stdout:
+                    print(f"    {line.rstrip()}")
+
+                # Wait for completion with timeout
+                try:
+                    process.wait(timeout=600)  # 10 minute timeout
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    print(f"  [WARN] Positive state generation timed out")
+                    return generated_states
+
+                if process.returncode == 0:
                     # Check for generated files
                     af2_alt = output_dir / f"{native_path.stem}_af2_alternate.pdb"
                     openmm_relax = output_dir / f"{native_path.stem}_openmm_relaxed.pdb"
@@ -179,14 +194,8 @@ class MultiStateValidator:
                         print(f"  [SUCCESS] Generated OpenMM relaxed state")
 
                 else:
-                    print(f"  [WARN] Positive state generation failed (exit code {result.returncode}):")
-                    if result.stderr:
-                        print(f"    stderr: {result.stderr}")
-                    if result.stdout:
-                        print(f"    stdout: {result.stdout}")
+                    print(f"  [WARN] Positive state generation failed (exit code {process.returncode})")
 
-            except subprocess.TimeoutExpired:
-                print(f"  [WARN] Positive state generation timed out")
             except Exception as e:
                 print(f"  [WARN] Positive state generation error: {e}")
         else:
@@ -209,8 +218,9 @@ class MultiStateValidator:
             # Force reinitialization on the correct GPU
             _ = jax.devices()  # Trigger device discovery
 
+            # Use "fixbb" protocol for validation to get proper ipTM/pTM scores
             self.af_model = mk_afdesign_model(
-                protocol="binder",
+                protocol="fixbb",
                 use_multimer=True,
                 num_recycles=3,
                 data_dir="/data/params"  # Assumes params are in standard location
@@ -249,7 +259,7 @@ class MultiStateValidator:
                 print(f"[WARN] No PDB file found for {design_name} in {self.accepted_dir}, skipping")
                 continue
 
-            print(f"\n[INFO] Validating {design_name} against {len(self.target_states)} states...")
+            print(f"\n[INFO] Validating {design_name} against {len(self.target_states)} states...", flush=True)
 
             # Validate against all states
             state_results = self.validate_design(design_name, binder_pdb, row)
@@ -267,13 +277,12 @@ class MultiStateValidator:
         # Generate report
         report = self.generate_report(df_results)
 
-        print(f"\n[SUMMARY] Multi-state validation complete:")
-        print(f"  Total designs: {len(df_results)}")
-        print(f"  Hard failures: {len(df_results[df_results['hard_failure'] == True])}")
-        print(f"  Designs passing hard filters: {len(df_results[df_results['hard_failure'] == False])}")
+        print(f"\n[SUMMARY] Multi-state validation complete:", flush=True)
+        print(f"  Total designs: {len(df_results)}", flush=True)
         if len(df_results) > 0:
-            print(f"  Rank score range: {df_results['composite_rank_score'].min():.1f} - {df_results['composite_rank_score'].max():.1f}")
-            print(f"  Mean rank score: {df_results['composite_rank_score'].mean():.1f}")
+            print(f"  Rank score range: {df_results['composite_rank_score'].min():.1f} - {df_results['composite_rank_score'].max():.1f}", flush=True)
+            print(f"  Mean rank score: {df_results['composite_rank_score'].mean():.1f}", flush=True)
+            print(f"  Median rank score: {df_results['composite_rank_score'].median():.1f}", flush=True)
 
         return df_results, report
 
@@ -283,7 +292,7 @@ class MultiStateValidator:
 
         for target_state in self.target_states:
             validation_type = target_state.get('validation_type', 'positive')
-            print(f"  Testing {validation_type} state: {target_state['name']}...")
+            print(f"  Testing {validation_type} state: {target_state['name']}...", flush=True)
 
             result = {
                 'design': design_name,
@@ -296,7 +305,7 @@ class MultiStateValidator:
             complex_result = self.create_complex(binder_pdb, target_state)
 
             if complex_result is None:
-                print(f"    [ERROR] Failed to create complex for {target_state['name']}")
+                print(f"    [ERROR] Failed to create complex for {target_state['name']}", flush=True)
                 result['validation_status'] = 'FAILED'
                 state_results.append(result)
                 continue
@@ -417,7 +426,7 @@ class MultiStateValidator:
             self.pdb_io.set_structure(complex_structure)
             self.pdb_io.save(str(complex_pdb_path))
 
-            print(f"    [INFO] Created complex: {len(target_chains)} target chain(s) + binder (chain {binder_chain_id})")
+            print(f"    [INFO] Created complex: {len(target_chains)} target chain(s) + binder (chain {binder_chain_id})", flush=True)
 
             return complex_pdb_path, binder_chain_id
 
@@ -469,8 +478,9 @@ class MultiStateValidator:
             clear_mem()
 
             # Reinitialize with same settings
+            # Use "fixbb" protocol instead of "binder" to get proper ipTM/pTM scores for validation
             self.af_model = mk_afdesign_model(
-                protocol="binder",
+                protocol="fixbb",
                 use_multimer=True,
                 num_recycles=3,
                 data_dir="/data/params"
@@ -488,7 +498,7 @@ class MultiStateValidator:
                 self.af_model.predict(verbose=False)
             except Exception as pred_error:
                 error_msg = str(pred_error)
-                print(f"    [ERROR] AF2 prediction failed: {error_msg}")
+                print(f"    [ERROR] AF2 prediction failed: {error_msg}", flush=True)
                 # Clear memory after failure
                 clear_mem()
                 return {'af2_error': error_msg, 'validation_status': 'PARTIAL'}
@@ -504,8 +514,9 @@ class MultiStateValidator:
 
             # Binder pLDDT (last binder_len residues)
             # Copy to numpy array immediately to avoid JAX array deletion
-            plddt_array = np.array(af2_outputs['plddt']).copy()
-            print(f"    [DEBUG] pLDDT array shape: {plddt_array.shape}, mean: {np.mean(plddt_array):.2f}, min: {np.min(plddt_array):.2f}, max: {np.max(plddt_array):.2f}")
+            # ColabDesign returns pLDDT in 0-1 range, multiply by 100 for 0-100 scale
+            plddt_array = np.array(af2_outputs['plddt']).copy() * 100.0
+            print(f"    [DEBUG] pLDDT array shape: {plddt_array.shape}, mean: {np.mean(plddt_array):.2f}, min: {np.min(plddt_array):.2f}, max: {np.max(plddt_array):.2f}", flush=True)
             binder_plddt = np.mean(plddt_array[target_total_len:])
             metrics['binder_plddt'] = float(binder_plddt)
 
@@ -527,13 +538,52 @@ class MultiStateValidator:
                 metrics['interface_pae'] = np.nan
 
             # pTM and ipTM scores - extract as python floats immediately
+            # ColabDesign uses 'i_ptm' not 'iptm'
             metrics['ptm'] = float(af2_outputs.get('ptm', np.nan))
-            metrics['iptm'] = float(af2_outputs.get('iptm', np.nan))
+            metrics['iptm'] = float(af2_outputs.get('i_ptm', np.nan))
+
+            # Interface contact map analysis (i_cmap)
+            if 'i_cmap' in af2_outputs:
+                # i_cmap gives contact probabilities at the interface
+                # Shape is typically (binder_len, target_len) for interface contacts
+                i_cmap = np.array(af2_outputs['i_cmap']).copy()
+
+                # Count high-confidence interface contacts (prob > 0.5)
+                interface_contacts = np.sum(i_cmap > 0.5)
+                metrics['interface_contact_count'] = int(interface_contacts)
+
+                # Average interface contact probability
+                metrics['interface_contact_prob'] = float(np.mean(i_cmap))
+
+                # Maximum contact probability (strongest interaction)
+                metrics['max_interface_contact'] = float(np.max(i_cmap))
+            else:
+                metrics['interface_contact_count'] = np.nan
+                metrics['interface_contact_prob'] = np.nan
+                metrics['max_interface_contact'] = np.nan
+
+            # Save predicted structure for inspection
+            try:
+                # Create output directory for predicted structures
+                predicted_dir = self.output_dir / "MultiStateValidation" / "predicted_structures"
+                predicted_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate filename: design_state.pdb
+                predicted_pdb = predicted_dir / f"{design_name}_{state_name}.pdb"
+
+                # Save using af_model's save_pdb method
+                self.af_model.save_pdb(str(predicted_pdb))
+                metrics['predicted_structure_path'] = str(predicted_pdb)
+
+            except Exception as save_error:
+                print(f"    [WARN] Could not save predicted structure: {save_error}", flush=True)
+                metrics['predicted_structure_path'] = None
 
             num_target_chains = len(target_chains)
             iptm_str = f"{metrics['iptm']:.3f}" if not np.isnan(metrics['iptm']) else "N/A"
             ipae_str = f"{metrics['interface_pae']:.2f}" if not np.isnan(metrics['interface_pae']) else "N/A"
-            print(f"    pLDDT: {binder_plddt:.1f}, iPAE: {ipae_str}, ipTM: {iptm_str} ({num_target_chains} target chains)")
+            icontacts_str = f"{metrics['interface_contact_count']}" if not np.isnan(metrics.get('interface_contact_count', np.nan)) else "N/A"
+            print(f"    pLDDT: {binder_plddt:.1f}, iPAE: {ipae_str}, ipTM: {iptm_str}, Contacts: {icontacts_str} ({num_target_chains} target chains)", flush=True)
 
             # Clear memory after extracting all needed data
             clear_mem()
@@ -553,8 +603,6 @@ class MultiStateValidator:
         """Generate summary report with positive/negative breakdown and ranking statistics"""
         report = {
             'total_designs': len(df_results),
-            'hard_failures': len(df_results[df_results['hard_failure'] == True]),
-            'designs_passing_hard_filters': len(df_results[df_results['hard_failure'] == False]),
             'num_positive_states': len(self.positive_states),
             'num_negative_states': len(self.negative_states),
             'positive_state_names': [s['name'] for s in self.positive_states],
@@ -602,10 +650,6 @@ class MultiStateValidator:
                     }
         report['negative_state_performance'] = negative_metrics if negative_metrics else None
 
-        # Catastrophic failures breakdown
-        catastrophic_count = df_results['has_catastrophic_failure'].sum() if 'has_catastrophic_failure' in df_results.columns else 0
-        report['designs_with_catastrophic_failures'] = int(catastrophic_count)
-
         # Top designs summary
         if len(df_results) > 0:
             top_n = min(10, len(df_results))
@@ -635,11 +679,15 @@ def main():
         print("[ERROR] Validation failed")
         sys.exit(1)
 
+    # Remove original columns from CSV output - keep only multi-state validation data
+    columns_to_remove = [col for col in df_results.columns if col.startswith('original_')]
+    df_clean = df_results.drop(columns=columns_to_remove, errors='ignore')
+
     # Save results
     results_csv = output_dir / "multi_state_scores.csv"
     report_json = output_dir / "multi_state_report.json"
 
-    df_results.to_csv(results_csv, index=False)
+    df_clean.to_csv(results_csv, index=False)
 
     with open(report_json, 'w') as f:
         json.dump(report, f, indent=2)

@@ -86,19 +86,21 @@ class PositiveStateGenerator:
                     print(f"\n  Attempt {attempt}/{max_attempts}...")
 
                 # Initialize AF2 model for structure prediction (not design)
+                # Use hallucination protocol for sequence-only input
                 af_model = mk_afdesign_model(
-                    protocol="fixbb",
+                    protocol="hallucination",
                     use_multimer=False,
                     num_recycles=1,  # Reduced recycles = more diversity
                     data_dir="/data/params"
                 )
 
-                # Prepare inputs using sequence (not pdb_filename)
-                # For fixbb protocol with sequence input, we need to use the right method
+                # Prepare inputs using sequence for hallucination protocol
                 af_model.prep_inputs(
-                    sequence=self.sequence,
-                    chain=None  # Chain should be None for sequence-only input
+                    length=len(self.sequence)
                 )
+
+                # Set the sequence
+                af_model.set_seq(self.sequence)
 
                 # Set random seed (vary seed per attempt)
                 current_seed = seed + (attempt - 1) * 10

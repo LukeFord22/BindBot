@@ -4,7 +4,7 @@
 
   "_comment_auto_generation": "Automatic positive state generation from native target",
   "auto_generate_positive_states": true,
-  "native_target_pdb": "Inputs/PDL1.pdb",
+  "native_target_pdb": "Inputs/SEB.pdb",
   "native_target_chain": "A",
   "_note_auto_gen": "Automatically generates 2 positive states: (1) AF2 alternate conformation, (2) OpenMM relaxed/equilibrated. (Native state NOT included)",
 
@@ -27,43 +27,23 @@
   ],
 
   "positive_validation": {
-    "pass_criteria": {
-      "min_binder_plddt": 80,
-      "max_interface_pae": 10.0,
-      "min_interface_contacts": 10,
-      "preferred_interface_contacts": 15,
-      "max_interface_clashes": 0,
-      "min_success_rate": 0.8,
-      "min_iptm": 0.5,
-      "max_positive_score_variance": 0.25,
-      "no_catastrophic_state_failure": true
+    "_note": "Scoring parameters for positive states (on-target binding)",
+    "scoring": {
+      "preferred_interface_contacts": 10,
+      "_note_interface_contacts": "Target number of AF2 i_cmap predicted contacts (prob > 0.5) for optimal binding score"
     }
   },
 
   "negative_validation": {
-    "pass_criteria": {
+    "_note": "Scoring parameters for negative states (off-target specificity)",
+    "scoring": {
       "max_negative_iptm": 0.35,
+      "_note_iptm": "ipTM values above this reduce specificity score",
       "min_negative_interface_pae": 15.0,
-      "max_negative_interface_contacts": 6,
-      "max_negative_success_rate": 0.2,
-      "max_negative_repeated_docking_rate": 0.2,
-      "positive_negative_score_margin": 0.3,
-      "reject_if_any_confident_offtarget": true
+      "_note_pae": "Interface pAE values below this reduce specificity score",
+      "max_negative_interface_contacts": 8,
+      "_note_contacts": "Contact counts above this reduce specificity score"
     }
-  },
-
-  "catastrophic_failure_definition": {
-    "binder_plddt_below": 70,
-    "interface_pae_above": 20.0,
-    "interface_contacts_below": 5,
-    "iptm_below": 0.35,
-    "major_clashes_above": 0
-  },
-
-  "ranking_weights": {
-    "positive_mean_score": 0.4,
-    "positive_worst_case_score": 0.3,
-    "positive_consistency": 0.15,
-    "negative_specificity_margin": 0.15
   }
+
 }

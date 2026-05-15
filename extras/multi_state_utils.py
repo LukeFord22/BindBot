@@ -179,20 +179,23 @@ def check_catastrophic_failure(result: Dict, config: Dict) -> Tuple[bool, str]:
     catastrophic_def = config.get('catastrophic_failure_definition', {})
 
     # Check binder pLDDT
-    if result.get('binder_plddt', 100) < catastrophic_def.get('binder_plddt_below', 70):
-        return True, f"binder_plddt={result.get('binder_plddt'):.1f} < {catastrophic_def.get('binder_plddt_below')}"
+    binder_plddt = result.get('binder_plddt', 100)
+    if not np.isnan(binder_plddt) and binder_plddt < catastrophic_def.get('binder_plddt_below', 70):
+        return True, f"binder_plddt={binder_plddt:.1f} < {catastrophic_def.get('binder_plddt_below')}"
 
     # Check interface pAE
-    if result.get('interface_pae', 0) > catastrophic_def.get('interface_pae_above', 20):
-        return True, f"interface_pae={result.get('interface_pae'):.2f} > {catastrophic_def.get('interface_pae_above')}"
+    interface_pae = result.get('interface_pae', 0)
+    if not np.isnan(interface_pae) and interface_pae > catastrophic_def.get('interface_pae_above', 20):
+        return True, f"interface_pae={interface_pae:.2f} > {catastrophic_def.get('interface_pae_above')}"
 
     # Check interface contacts
     if result.get('interface_contacts', 100) < catastrophic_def.get('interface_contacts_below', 5):
         return True, f"interface_contacts={result.get('interface_contacts')} < {catastrophic_def.get('interface_contacts_below')}"
 
-    # Check ipTM
-    if result.get('iptm', 1.0) < catastrophic_def.get('iptm_below', 0.35):
-        return True, f"iptm={result.get('iptm'):.3f} < {catastrophic_def.get('iptm_below')}"
+    # Check ipTM - skip if NaN (not available)
+    iptm = result.get('iptm', 1.0)
+    if not np.isnan(iptm) and iptm < catastrophic_def.get('iptm_below', 0.35):
+        return True, f"iptm={iptm:.3f} < {catastrophic_def.get('iptm_below')}"
 
     # Check clashes
     if result.get('interface_clashes', 0) > catastrophic_def.get('major_clashes_above', 0):
@@ -210,31 +213,47 @@ def compute_positive_state_score(result: Dict, config: Dict) -> float:
     weights_sum = 0.0
 
     # Binder pLDDT (weight: 0.3)
-    if 'binder_plddt' in result:
+    if 'binder_plddt' in result and not np.isnan(result['binder_plddt']):
         plddt = result['binder_plddt']
         score += (plddt / 100.0) * 0.3
         weights_sum += 0.3
 
     # Interface pAE (weight: 0.25, inverted - lower is better)
-    if 'interface_pae' in result:
+    if 'interface_pae' in result and not np.isnan(result['interface_pae']):
         ipae = result['interface_pae']
         normalized_ipae = max(0, 1 - (ipae / 20.0))
         score += normalized_ipae * 0.25
         weights_sum += 0.25
 
-    # ipTM (weight: 0.25)
-    if 'iptm' in result:
+    # ipTM (weight: 0.2) - skip if NaN
+    if 'iptm' in result and not np.isnan(result['iptm']):
         iptm = result['iptm']
-        score += iptm * 0.25
-        weights_sum += 0.25
+        score += iptm * 0.2
+        weights_sum += 0.2
 
-    # Interface contacts (weight: 0.15)
-    if 'interface_contacts' in result:
-        contacts = result['interface_contacts']
-        preferred_contacts = config.get('positive_validation', {}).get('pass_criteria', {}).get('preferred_interface_contacts', 15)
+    # Interface contacts from i_cmap (weight: 0.15) - prioritize AF2's predicted contacts
+    if 'interface_contact_count' in result and not np.isnan(result.get('interface_contact_count', np.nan)):
+        contacts = result['interface_contact_count']
+        # Expect 10-30 high-confidence contacts for good binder
+        preferred_contacts = config.get('positive_validation', {}).get('scoring', {}).get('preferred_interface_contacts', 20)
         normalized_contacts = min(1.0, contacts / preferred_contacts)
         score += normalized_contacts * 0.15
         weights_sum += 0.15
+    # Fallback to geometric contacts if i_cmap not available
+    elif 'interface_contacts' in result:
+        contacts = result['interface_contacts']
+        preferred_contacts = config.get('positive_validation', {}).get('scoring', {}).get('preferred_interface_contacts', 15)
+        normalized_contacts = min(1.0, contacts / preferred_contacts)
+        score += normalized_contacts * 0.15
+        weights_sum += 0.15
+
+    # Interface contact probability (weight: 0.1) - new metric from i_cmap
+    if 'interface_contact_prob' in result and not np.isnan(result.get('interface_contact_prob', np.nan)):
+        contact_prob = result['interface_contact_prob']
+        # Mean probability > 0.3 indicates strong interface
+        normalized_prob = min(1.0, contact_prob / 0.4)
+        score += normalized_prob * 0.1
+        weights_sum += 0.1
 
     # Clash penalty (weight: 0.05)
     if 'interface_clashes' in result:
@@ -257,29 +276,46 @@ def compute_negative_state_score(result: Dict, config: Dict) -> float:
     """
     score = 1.0  # Start at perfect specificity
 
-    # Penalize high ipTM (indicates binding)
-    if 'iptm' in result:
+    # Penalize high ipTM (indicates binding) - skip if NaN
+    if 'iptm' in result and not np.isnan(result['iptm']):
         iptm = result['iptm']
-        max_allowed_iptm = config.get('negative_validation', {}).get('pass_criteria', {}).get('max_negative_iptm', 0.35)
+        max_allowed_iptm = config.get('negative_validation', {}).get('scoring', {}).get('max_negative_iptm', 0.35)
         if iptm > max_allowed_iptm:
             penalty = (iptm - max_allowed_iptm) / (1.0 - max_allowed_iptm)
             score -= penalty * 0.4
 
-    # Penalize low interface pAE (indicates confident binding)
-    if 'interface_pae' in result:
+    # Penalize low interface pAE (indicates confident binding) - skip if NaN
+    if 'interface_pae' in result and not np.isnan(result['interface_pae']):
         ipae = result['interface_pae']
-        min_allowed_ipae = config.get('negative_validation', {}).get('pass_criteria', {}).get('min_negative_interface_pae', 15.0)
+        min_allowed_ipae = config.get('negative_validation', {}).get('scoring', {}).get('min_negative_interface_pae', 15.0)
         if ipae < min_allowed_ipae:
             penalty = (min_allowed_ipae - ipae) / min_allowed_ipae
             score -= penalty * 0.3
 
-    # Penalize high interface contacts
-    if 'interface_contacts' in result:
+    # Penalize high interface contact count from i_cmap (prioritize AF2's predictions)
+    if 'interface_contact_count' in result and not np.isnan(result.get('interface_contact_count', np.nan)):
+        contacts = result['interface_contact_count']
+        # Should have < 8 high-confidence contacts to off-target
+        max_allowed_contacts = config.get('negative_validation', {}).get('scoring', {}).get('max_negative_interface_contacts', 8)
+        if contacts > max_allowed_contacts:
+            penalty = min(1.0, (contacts - max_allowed_contacts) / 15.0)
+            score -= penalty * 0.2
+    # Fallback to geometric contacts
+    elif 'interface_contacts' in result:
         contacts = result['interface_contacts']
-        max_allowed_contacts = config.get('negative_validation', {}).get('pass_criteria', {}).get('max_negative_interface_contacts', 6)
+        max_allowed_contacts = config.get('negative_validation', {}).get('scoring', {}).get('max_negative_interface_contacts', 6)
         if contacts > max_allowed_contacts:
             penalty = min(1.0, (contacts - max_allowed_contacts) / 10.0)
-            score -= penalty * 0.3
+            score -= penalty * 0.2
+
+    # Penalize high interface contact probability (new metric from i_cmap)
+    if 'interface_contact_prob' in result and not np.isnan(result.get('interface_contact_prob', np.nan)):
+        contact_prob = result['interface_contact_prob']
+        # Mean probability should be < 0.2 for non-binder
+        max_allowed_prob = 0.25
+        if contact_prob > max_allowed_prob:
+            penalty = (contact_prob - max_allowed_prob) / (1.0 - max_allowed_prob)
+            score -= penalty * 0.1
 
     return max(0.0, score)
 
@@ -290,10 +326,31 @@ def aggregate_state_results(design_name: str, state_results: List[Dict], origina
         'design': design_name,
     }
 
-    # Copy original metrics
-    for col in original_metrics.index:
-        if col not in aggregated:
-            aggregated[f'original_{col}'] = original_metrics[col]
+    # Create score columns for each individual state (score matrix)
+    # These columns show performance against each target state
+    for result in state_results:
+        state_name = result.get('state_name', 'unknown')
+        validation_type = result.get('validation_type', 'positive')
+
+        # Calculate score based on validation type
+        # Check if AF2 prediction succeeded (has metrics we need)
+        has_metrics = 'binder_plddt' in result or 'iptm' in result
+
+        if validation_type == 'positive':
+            # Positive state: binding quality score (0-1, higher = better binding)
+            if has_metrics:
+                score = compute_positive_state_score(result, config)
+            else:
+                score = 0.0  # AF2 prediction failed, no binding score
+        else:
+            # Negative state: specificity score (0-1, higher = better rejection of off-target)
+            if has_metrics:
+                score = compute_negative_state_score(result, config)
+            else:
+                score = 1.0  # AF2 prediction failed = assume no binding (perfect specificity)
+
+        # Add column with state score
+        aggregated[f'{state_name}_score'] = float(score)
 
     # Separate positive and negative results
     positive_results = [r for r in state_results if r.get('validation_type') == 'positive']
@@ -384,41 +441,44 @@ def aggregate_state_results(design_name: str, state_results: List[Dict], origina
 
 def compute_composite_rank_score(row: pd.Series, config: Dict) -> float:
     """
-    Compute final composite ranking score using configured weights.
+    Compute final composite ranking score from individual state scores.
     Returns score 0-100 (higher is better).
+
+    Simple 50/50 split:
+    - 50% from average of all positive state scores (binding quality)
+    - 50% from average of all negative state scores (specificity)
     """
-    weights = config.get('ranking_weights', {
-        'positive_mean_score': 0.4,
-        'positive_worst_case_score': 0.3,
-        'positive_consistency': 0.15,
-        'negative_specificity_margin': 0.15
-    })
+    # Collect all state scores from the matrix
+    positive_scores = []
+    negative_scores = []
 
-    score = 0.0
+    for col in row.index:
+        if col.endswith('_score'):
+            # Determine if this is a positive or negative state
+            # We can check the state name against the config or use naming convention
+            state_name = col.replace('_score', '')
 
-    # Positive mean score
-    score += row.get('positive_mean_score', 0) * weights.get('positive_mean_score', 0.4)
+            # For now, assume negative states have known names (BSA, Streptavidin, etc.)
+            # or we rely on the validation having stored this info
+            # Simpler: use the aggregate metrics that were already calculated
+            pass
 
-    # Positive worst-case score
-    score += row.get('positive_worst_score', 0) * weights.get('positive_worst_case_score', 0.3)
+    # Use the pre-calculated mean scores
+    positive_mean = row.get('positive_mean_score', 0)
+    negative_mean = row.get('negative_mean_specificity', 1.0)  # Default 1.0 if no negatives
 
-    # Positive consistency (inverse of variance)
-    score += row.get('positive_consistency', 0) * weights.get('positive_consistency', 0.15)
+    # Simple 50/50 weighted average
+    composite_score = (positive_mean * 0.5) + (negative_mean * 0.5)
 
-    # Negative specificity margin
-    score += row.get('specificity_margin', 0) * weights.get('negative_specificity_margin', 0.15)
-
-    # Catastrophic failure penalty
-    if row.get('has_catastrophic_failure', False):
-        score *= 0.1  # 90% penalty for any catastrophic failure
-
-    return min(100, max(0, score * 100))
+    return min(100, max(0, composite_score * 100))
 
 
 def apply_multistate_filters(df: pd.DataFrame, config: Dict) -> pd.DataFrame:
     """
-    Apply scoring and ranking system instead of binary pass/fail.
-    Adds composite_rank_score and identifies hard failures.
+    Apply scoring and ranking system.
+
+    No hard pass/fail filtering - only generates scores and rankings.
+    Users can apply their own thresholds based on the score matrix.
     """
     # Compute composite rank scores
     df['composite_rank_score'] = df.apply(lambda row: compute_composite_rank_score(row, config), axis=1)
@@ -426,33 +486,5 @@ def apply_multistate_filters(df: pd.DataFrame, config: Dict) -> pd.DataFrame:
     # Sort by rank score (highest first)
     df = df.sort_values('composite_rank_score', ascending=False).reset_index(drop=True)
     df['rank'] = df.index + 1
-
-    # Identify hard failures (vs soft ranking)
-    df['hard_failure'] = False
-    df['failure_reasons'] = ''
-
-    positive_criteria = config.get('positive_validation', {}).get('pass_criteria', {})
-    negative_criteria = config.get('negative_validation', {}).get('pass_criteria', {})
-
-    for idx, row in df.iterrows():
-        reasons = []
-
-        # Catastrophic failure check
-        if row.get('has_catastrophic_failure', False):
-            if positive_criteria.get('no_catastrophic_state_failure', True):
-                reasons.append(f"Catastrophic failure: {row.get('catastrophic_failures', '')}")
-
-        # Positive state hard failures
-        if row.get('positive_worst_score', 1.0) < 0.3:  # Very low worst-case score
-            reasons.append(f"Critical positive state failure (worst_score={row.get('positive_worst_score', 0):.2f})")
-
-        # Negative state hard failures (binding to off-target)
-        if row.get('negative_worst_specificity', 1.0) < 0.5:
-            if negative_criteria.get('reject_if_any_confident_offtarget', True):
-                reasons.append(f"Confident off-target binding (specificity={row.get('negative_worst_specificity', 0):.2f})")
-
-        if reasons:
-            df.at[idx, 'hard_failure'] = True
-            df.at[idx, 'failure_reasons'] = '; '.join(reasons)
 
     return df

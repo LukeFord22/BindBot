@@ -13,15 +13,16 @@ set -euo pipefail
 #############################################
 
 # Required: Path to your BindCraft output directory
-OUTPUT_DIR="/workspace/outputs/your_design_here"
+OUTPUT_DIR="/workspace/outputs/SEB"
 
 # Post-filtering: Apply additional biochemical/structural filters to accepted designs
-ENABLE_POST_FILTERING=true
+ENABLE_POST_FILTERING=false
 POST_FILTER_CONFIG="settings/settings_post_filter/post_filter_config.json"
 
 # Multi-state validation: Test binders against multiple target conformations
 ENABLE_MULTI_STATE=true
 MULTI_STATE_CONFIG="settings/settings_validation/multi_state_config.json"
+FORCE_SEQUENTIAL=false  # Can be overridden with --sequential flag
 
 #############################################
 ### END CONFIG
@@ -154,10 +155,10 @@ fi
 # Make OUTPUT_DIR absolute
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 
-# Setup logging
+# Setup logging with unbuffered tee for real-time output
 mkdir -p "$OUTPUT_DIR"
 touch "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+exec > >(stdbuf -oL -eL tee -a "$LOG_FILE") 2>&1
 
 echo "=== [POST-PROCESSING STANDALONE] $(date) ==="
 echo "[INFO] Input directory: $OUTPUT_DIR"
